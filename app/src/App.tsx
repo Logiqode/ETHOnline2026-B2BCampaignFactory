@@ -1,6 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
 import Navbar from './components/Navbar'
-import FactoryConsole from './pages/FactoryConsole'
+import CampaignWizard from './pages/CampaignWizard'
 import BrandAPos from './pages/BrandAPos'
 import BrandBRedeem from './pages/BrandBRedeem'
 
@@ -9,7 +9,7 @@ export default function App() {
     <>
       <Navbar />
       <Routes>
-        <Route path="/" element={<FactoryConsole />} />
+        <Route path="/" element={<CampaignWizard />} />
         <Route path="/brand-a" element={<BrandAPos />} />
         <Route path="/brand-b" element={<BrandBRedeem />} />
       </Routes>

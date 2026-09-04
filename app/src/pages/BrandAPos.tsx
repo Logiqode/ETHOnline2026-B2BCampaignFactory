@@ -1,7 +1,4 @@
-import { RULE_CATALOG } from '../lib/campaign'
-
 export default function BrandAPos() {
-  const minSpend = RULE_CATALOG.find((r) => r.id === 'min-spend')
   return (
     <div className="page">
       <div className="page-header">
@@ -15,8 +12,7 @@ export default function BrandAPos() {
       <div className="card" style={{ maxWidth: 640 }}>
         <div className="card-title">Purchase entry</div>
         <div className="card-desc">
-          UI shell only — live CRE submission wires in after the receiver contract is deployed. Rule:{' '}
-          <span className="mono">{minSpend?.enabled ? 'Minimum spend' : '—'}</span>
+          UI shell only — live CRE submission wires in after the receiver contract is deployed.
         </div>
 
         <div className="field">

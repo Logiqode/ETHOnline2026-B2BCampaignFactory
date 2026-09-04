@@ -311,6 +311,11 @@ textarea.input {
   opacity: 0.6;
 }
 
+.rule-item.production-limited {
+  border-color: var(--border-subtle);
+  background: #fdfaf2;
+}
+
 .rule-head {
   display: flex;
   align-items: flex-start;
@@ -371,16 +376,31 @@ textarea.input {
   gap: 10px;
 }
 
+/* Rule state badges */
 .rule-status {
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--text-quaternary);
   text-transform: uppercase;
   letter-spacing: 0.3px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .rule-item.enabled .rule-status {
   color: var(--accent);
+}
+
+.rule-item.disabled .rule-status {
+  color: var(--text-quaternary);
+  background: var(--bg-surface);
+}
+
+.rule-item.production-limited .rule-status {
+  color: #8a6d1a;
+  background: #f4e8c2;
 }
 
 /* Rule config inputs (revealed when enabled) */
@@ -404,7 +424,7 @@ textarea.input {
 .brand-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-standard);
@@ -425,8 +445,17 @@ textarea.input {
   flex-shrink: 0;
 }
 
+/* Brand name select — wide */
 .brand-select {
   flex: 1;
+  min-width: 0;
+}
+
+/* Role select — narrow */
+.role-select {
+  width: auto;
+  min-width: 130px;
+  flex-shrink: 0;
 }
 
 .brand-remove {
@@ -456,6 +485,57 @@ textarea.input {
   cursor: not-allowed;
   width: 100%;
   text-align: left;
+}
+
+/* Reward type segmented selector */
+.segmented {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.segmented button {
+  flex: 1;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-right: 1px solid var(--border-subtle);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.segmented button:last-child {
+  border-right: none;
+}
+
+.segmented button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.segmented button.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.reward-type-hint {
+  font-size: 12px;
+  color: var(--text-quaternary);
+  margin-top: 6px;
+}
+
+/* Reward blocks grid */
+.reward-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
 }
 
 /* Insights / summary */

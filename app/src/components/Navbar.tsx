@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 
 const PAGES = [
-  { to: '/', label: 'Factory Console', end: true },
+  { to: '/', label: 'Campaign Wizard', end: true },
   { to: '/brand-a', label: 'Brand A — POS' },
   { to: '/brand-b', label: 'Brand B — Redeem' },
 ]

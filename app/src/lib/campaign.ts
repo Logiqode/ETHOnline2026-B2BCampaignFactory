@@ -1,17 +1,41 @@
 // Campaign configuration model.
 //
-// Rules are toggleable: enabling a rule reveals its value inputs (with a 1-line
-// guide), exactly the chainlink-cre discover / privy pattern. v1 demo scope:
-// the two core rules (Minimum spend, Campaign window) are ON; the rest of the
-// catalog is greyed-out frontend presentation (no backend/contract logic).
+// The wizard is a building-block assembly across four sections:
+//   Campaign Description (name + participating brands)
+//   Campaign Terms      (window, total redeem cap)
+//   Campaign Rules      (toggleable eligibility gates)
+//   Campaign Rewards    (reward type + cashback/discount blocks)
 
-export interface RuleConfig {
+export type RuleState = 'enabled' | 'disabled' | 'production-limited'
+export type BrandRole = 'pos' | 'reward'
+export type RewardType = 'points' | 'digital' | 'physical'
+
+export const BRAND_ROLES: { value: BrandRole; label: string; short: string }[] = [
+  { value: 'pos', label: 'POS / Issuing (earn at)', short: 'POS' },
+  { value: 'reward', label: 'Reward minter / Redemption', short: 'Reward' },
+]
+
+export const BRANDS = ['Acme Coffee', 'Globex Books', 'Initech Foods', 'Hooli Fitness', 'Umbrella Goods'] as const
+
+export interface BrandParticipant {
+  name: string
+  role: BrandRole
+}
+
+// ─── Reward asset types (NOT NULL selector) ────────────────────
+export const REWARD_TYPES: { value: RewardType; label: string; hint: string }[] = [
+  { value: 'points', label: 'Points', hint: 'Fungible, e.g. Bpoints' },
+  { value: 'digital', label: 'Digital Merchandise', hint: 'NFT-like ERC-1155 badge/item' },
+  { value: 'physical', label: 'Physical Merchandise', hint: 'Off-chain fulfillment' },
+]
+
+// ─── Reward mechanics blocks ───────────────────────────────────
+export interface RewardBlock {
   id: string
   name: string
   description: string
-  guide: string        // 1-line "what this rule does" for the value inputs
-  enabled: boolean
-  // Value inputs that appear when the rule is enabled.
+  guide: string
+  state: 'enabled' | 'disabled'
   fields: RuleField[]
 }
 
@@ -20,65 +44,87 @@ export interface RuleField {
   label: string
   hint?: string
   type: 'number' | 'text' | 'datetime' | 'select'
-  options?: string[]   // for select
+  options?: string[]
   placeholder?: string
 }
 
-export const RULE_CATALOG: RuleConfig[] = [
+// Cashback: rate (%) + optional per-user cap. Discount: a value off.
+export const REWARD_BLOCKS: RewardBlock[] = [
+  {
+    id: 'cashback',
+    name: 'Cashback',
+    description: 'Return a % of the purchase as the reward asset.',
+    guide: 'Cashback rate and an optional per-user cap.',
+    state: 'enabled',
+    fields: [
+      { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10' },
+      { key: 'cashbackCap', label: 'Cashback cap / user (optional)', type: 'number', placeholder: '100' },
+    ],
+  },
+  {
+    id: 'discount',
+    name: 'Discount',
+    description: 'Simply discount the price by a fixed amount or %.',
+    guide: 'A flat discount applied at checkout.',
+    state: 'disabled',
+    fields: [
+      { key: 'discountValue', label: 'Discount', type: 'number', placeholder: '5' },
+      { key: 'discountType', label: 'Type', type: 'select', options: ['%', 'USD'] },
+    ],
+  },
+]
+
+// ─── Campaign Rules (toggleable eligibility gates) ─────────────
+// `disabled` rules are toggleable; `production-limited` rules are a static
+// yellow showcase (deferred, not in v1 build) — never clickable.
+export interface CampaignRule {
+  id: string
+  name: string
+  description: string
+  guide: string
+  state: RuleState
+  fields: RuleField[]
+}
+
+export const CAMPAIGN_RULES: CampaignRule[] = [
   {
     id: 'min-spend',
     name: 'Minimum spend',
     description: 'Reward only when the purchase total is at least X.',
     guide: 'The minimum USD amount a purchase must reach to qualify.',
-    enabled: true,
-    fields: [
-      { key: 'minSpend', label: 'Min spend (USD)', type: 'number', placeholder: '10' },
-    ],
-  },
-  {
-    id: 'campaign-window',
-    name: 'Campaign window',
-    description: 'Reward only within a start/end date range.',
-    guide: 'When the campaign is live. Pick "Semi-permanent" for no end date.',
-    enabled: true,
-    fields: [
-      { key: 'start', label: 'Start', type: 'datetime' },
-      {
-        key: 'windowType',
-        label: 'End',
-        type: 'select',
-        options: ['Semi-permanent', 'Set end date'],
-      },
-      { key: 'end', label: 'End date', type: 'datetime' },
-    ],
-  },
-  {
-    id: 'cashback',
-    name: 'Cashback rate',
-    description: 'Reward percentage returned on each qualifying purchase.',
-    guide: 'Percentage of the purchase returned as Bpoints (e.g. 10 = 10%).',
-    enabled: false,
-    fields: [
-      { key: 'rate', label: 'Cashback rate (%)', type: 'number', placeholder: '10' },
-      { key: 'rewardUnit', label: 'Reward unit', type: 'text', placeholder: 'Bpoints' },
-    ],
+    state: 'enabled',
+    fields: [{ key: 'minSpend', label: 'Min spend (USD)', type: 'number', placeholder: '10' }],
   },
   {
     id: 'reward-cap',
     name: 'Reward cap / user',
-    description: 'Lifetime Bpoints a single user can earn in this campaign.',
+    description: 'Lifetime reward a single user can earn in this campaign.',
     guide: 'Caps cumulative rewards per customer (anti-abuse).',
-    enabled: false,
-    fields: [
-      { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' },
-    ],
+    state: 'enabled',
+    fields: [{ key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' }],
+  },
+  {
+    id: 'day-of-week',
+    name: 'Day of week',
+    description: 'Weekend only / weekdays / a specific day.',
+    guide: 'Only reward purchases on chosen days.',
+    state: 'disabled',
+    fields: [{ key: 'day', label: 'Day', type: 'select', options: ['Any', 'Weekends', 'Weekdays', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] }],
+  },
+  {
+    id: 'member-tier',
+    name: 'Member tier',
+    description: 'e.g. Tier 2 / Gold and above.',
+    guide: 'Only members above a tier earn rewards.',
+    state: 'disabled',
+    fields: [{ key: 'tier', label: 'Tier', type: 'select', options: ['Tier 1', 'Tier 2', 'Tier 3', 'Gold', 'Platinum'] }],
   },
   {
     id: 'cumulative-spend',
     name: 'Cumulative spend period',
     description: 'Aggregate spending over a time window.',
     guide: 'Reward is based on cumulative spend, not per-transaction.',
-    enabled: false,
+    state: 'production-limited',
     fields: [{ key: 'period', label: 'Period (days)', type: 'number', placeholder: '30' }],
   },
   {
@@ -86,30 +132,15 @@ export const RULE_CATALOG: RuleConfig[] = [
     name: 'Max visits per period',
     description: 'Limit of 1 transaction per day in-window.',
     guide: 'Restricts how often a customer can earn in a period.',
-    enabled: false,
+    state: 'production-limited',
     fields: [{ key: 'max', label: 'Max transactions', type: 'number', placeholder: '1' }],
-  },
-  {
-    id: 'day-of-week',
-    name: 'Day of week',
-    description: 'Weekend only / weekdays / a specific day.',
-    guide: 'Only reward purchases on chosen days.',
-    enabled: false,
-    fields: [
-      {
-        key: 'day',
-        label: 'Day',
-        type: 'select',
-        options: ['Any', 'Weekends', 'Weekdays', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
-      },
-    ],
   },
   {
     id: 'pay-with-purchase',
     name: 'Pay-with-Purchase',
     description: 'Spend X to qualify, then pay Z to get Y.',
     guide: 'A second payment unlocks the reward after qualifying.',
-    enabled: false,
+    state: 'production-limited',
     fields: [
       { key: 'qualify', label: 'Qualify spend (X)', type: 'number' },
       { key: 'unlock', label: 'Unlock pay (Z)', type: 'number' },
@@ -120,7 +151,7 @@ export const RULE_CATALOG: RuleConfig[] = [
     name: 'Buy specific product',
     description: 'Eligible on a named product / combination.',
     guide: 'Only listed products trigger the reward.',
-    enabled: false,
+    state: 'production-limited',
     fields: [{ key: 'products', label: 'Products', type: 'text', placeholder: 'latte, pastry' }],
   },
   {
@@ -128,25 +159,15 @@ export const RULE_CATALOG: RuleConfig[] = [
     name: 'Is member',
     description: 'Must be a registered member.',
     guide: 'Requires a membership before rewarding.',
-    enabled: false,
+    state: 'production-limited',
     fields: [{ key: 'membership', label: 'Membership', type: 'select', options: ['Any', 'Specific'] }],
-  },
-  {
-    id: 'member-tier',
-    name: 'Member tier',
-    description: 'e.g. Tier 2 / Gold and above.',
-    guide: 'Only members above a tier earn rewards.',
-    enabled: false,
-    fields: [
-      { key: 'tier', label: 'Tier', type: 'select', options: ['Tier 1', 'Tier 2', 'Tier 3', 'Gold', 'Platinum'] },
-    ],
   },
   {
     id: 'refer-friend',
     name: 'Refer a friend',
     description: 'Reward tied to a successful referral.',
     guide: 'Reward when a referred friend completes a purchase.',
-    enabled: false,
+    state: 'production-limited',
     fields: [{ key: 'referralCount', label: 'Referrals', type: 'number', placeholder: '1' }],
   },
   {
@@ -154,21 +175,18 @@ export const RULE_CATALOG: RuleConfig[] = [
     name: 'Reward shapes',
     description: 'Cashback / badge / redeemable badge / flat discount.',
     guide: 'How the reward is delivered (points vs NFT badge).',
-    enabled: false,
-    fields: [
-      { key: 'shape', label: 'Shape', type: 'select', options: ['Cashback', 'Badge', 'Redeemable badge', 'Flat discount'] },
-    ],
+    state: 'production-limited',
+    fields: [{ key: 'shape', label: 'Shape', type: 'select', options: ['Cashback', 'Badge', 'Redeemable badge', 'Flat discount'] }],
   },
   {
     id: 'birth-month',
     name: 'Date-specific',
     description: 'e.g. customer birth month is July.',
     guide: 'Reward based on a customer attribute (birth month).',
-    enabled: false,
-    fields: [
-      { key: 'month', label: 'Month', type: 'select', options: ['January','February','March','April','May','June','July','August','September','October','November','December'] },
-    ],
+    state: 'production-limited',
+    fields: [{ key: 'month', label: 'Month', type: 'select', options: ['January','February','March','April','May','June','July','August','September','October','November','December'] }],
   },
 ]
 
-export const BRANDS = ['Acme Coffee', 'Globex Books', 'Initech Foods', 'Hooli Fitness', 'Umbrella Goods'] as const
+// Hardcoded end-date sentinel when "No end date" is selected (current year + 5000).
+export const NO_END_DATE_SENTINEL = `${new Date().getFullYear() + 5000}-12-31T23:59`
