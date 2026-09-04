@@ -6,3 +6,4 @@ AI USAGE:
 - Writing and formatting of technical spec, demo outline
 - Tools and or approaches recommended
 - Inconsistency checks
+- Smart contract writing and logic testing
