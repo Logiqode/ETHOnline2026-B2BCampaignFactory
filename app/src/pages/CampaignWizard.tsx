@@ -6,10 +6,12 @@ import {
   NO_END_DATE_SENTINEL,
   REWARD_BLOCKS,
   REWARD_TYPES,
+  TIMEZONES,
   type BrandParticipant,
   type BrandRole,
   type RewardType,
   type RuleState,
+  type Timezone,
 } from '../lib/campaign'
 
 // ─── Campaign Description (name + brands) ──────────────────────
@@ -27,6 +29,7 @@ const DEFAULT_TERMS = {
   noEndDate: true,
   end: '2026-12-31T23:59',
   totalRedeemCap: 10000000,
+  timezone: 'UTC' as Timezone,
 }
 
 // ─── Campaign Rules (toggleable) ───────────────────────────────
@@ -106,7 +109,7 @@ export default function CampaignWizard() {
     if (ruleStates['min-spend'] === 'enabled') rows.push({ label: 'Min spend', value: `$${ruleValues.minSpend}` })
     if (ruleStates['reward-cap'] === 'enabled') rows.push({ label: 'Per-user cap', value: `${ruleValues.cap} ${rewardTypeMeta.label}` })
     rows.push({ label: 'Total redeem cap', value: `${terms.totalRedeemCap.toLocaleString()} ${rewardTypeMeta.label}` })
-    rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · no end date` : `${terms.start} → ${terms.end}` })
+    rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap}`, mono: true })
     return rows
@@ -163,7 +166,12 @@ export default function CampaignWizard() {
           <div className="card-desc">Structural baseline — the campaign's envelope.</div>
           <div className="field">
             <label className="field-label">Start</label>
-            <input className="input" type="datetime-local" value={terms.start} onChange={(e) => setTerm('start', e.target.value)} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="input" style={{ flex: 1 }} type="datetime-local" value={terms.start} onChange={(e) => setTerm('start', e.target.value)} />
+              <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="Start timezone">
+                {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+              </select>
+            </div>
           </div>
           <div className="field">
             <label className="field-label">End date</label>
@@ -173,7 +181,12 @@ export default function CampaignWizard() {
               </button>
               <span className="field-hint" style={{ margin: 0 }}>No end date</span>
             </div>
-            <input className="input" type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} disabled={terms.noEndDate} style={{ marginTop: 8, opacity: terms.noEndDate ? 0.5 : 1 }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <input className="input" style={{ flex: 1, opacity: terms.noEndDate ? 0.5 : 1 }} type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} disabled={terms.noEndDate} />
+              <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="End timezone" disabled={terms.noEndDate}>
+                {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+              </select>
+            </div>
             <span className="field-hint">{terms.noEndDate ? 'No end date — end date fixed to a far-future sentinel (not enforced).' : 'Campaign ends at this datetime.'}</span>
           </div>
           <div className="field">

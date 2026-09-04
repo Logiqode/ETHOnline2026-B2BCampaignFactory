@@ -190,3 +190,24 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
 
 // Hardcoded end-date sentinel when "No end date" is selected (current year + 5000).
 export const NO_END_DATE_SENTINEL = `${new Date().getFullYear() + 5000}-12-31T23:59`
+
+// Common IANA timezones for the campaign window, with UTC offsets shown in the
+// label. Ordered by offset so UTC sits in the middle. The backend later converts
+// these to UTC for smart-contract creation.
+export const TIMEZONES = [
+  { label: 'America/Los_Angeles (PT, UTC-8)', value: 'America/Los_Angeles' },
+  { label: 'America/Denver (MT, UTC-7)', value: 'America/Denver' },
+  { label: 'America/Chicago (CT, UTC-6)', value: 'America/Chicago' },
+  { label: 'America/New_York (ET, UTC-5)', value: 'America/New_York' },
+  { label: 'UTC (UTC+0)', value: 'UTC' },
+  { label: 'Europe/London (UTC+0)', value: 'Europe/London' },
+  { label: 'Europe/Berlin (CET, UTC+1)', value: 'Europe/Berlin' },
+  { label: 'Europe/Paris (UTC+1)', value: 'Europe/Paris' },
+  { label: 'Asia/Shanghai (CST, UTC+8)', value: 'Asia/Shanghai' },
+  { label: 'Asia/Singapore (SGT, UTC+8)', value: 'Asia/Singapore' },
+  { label: 'Asia/Tokyo (JST, UTC+9)', value: 'Asia/Tokyo' },
+  { label: 'Asia/Seoul (KST, UTC+9)', value: 'Asia/Seoul' },
+  { label: 'Australia/Sydney (AEST, UTC+10)', value: 'Australia/Sydney' },
+] as const
+
+export type Timezone = (typeof TIMEZONES)[number]['value']

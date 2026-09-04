@@ -538,6 +538,13 @@ textarea.input {
   gap: 12px;
 }
 
+/* Timezone selector next to datetime fields */
+.timezone-select {
+  width: auto;
+  min-width: 150px;
+  flex-shrink: 0;
+}
+
 /* Insights / summary */
 .insight-row {
   display: flex;
