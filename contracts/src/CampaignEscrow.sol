@@ -23,11 +23,12 @@ import {CampaignReward} from "./CampaignReward.sol";
 ///        (only the enclave saw the POS payload) — that truthfulness is the enclave's job.
 ///
 ///      UTXO MODEL:
-///      - `amountBalance` = unspent reward (ERC-1155 balance mirrors this)
-///      - `amountSpent`    = lifetime spent; `amountSpent + amountBalance` = lifetime earned
-///      - Earn (claim)   : amountBalance += points, mint tokens
-///      - Spend (redeem) : amountBalance -= amount, amountSpent += amount, burn tokens
-///      Lineage preserved: sum never shrinks, totalClaimed lineage == spent + balance.
+///      - `unspentBalance` = currently spendable reward (ERC-1155 balance mirrors this)
+///      - `totalBalance`    = lifetime earned; never shrinks (lineage for M&A provenance)
+///      - Earn (claim)   : unspentBalance += points; totalBalance += points; mint tokens
+///      - Spend (redeem) : unspentBalance -= amount (totalBalance untouched); burn tokens
+///      Spent (history) is derivable as totalBalance - unspentBalance, but the lineage
+///      number itself (totalBalance) is preserved forever.
 contract CampaignEscrow {
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -44,6 +45,8 @@ contract CampaignEscrow {
     error CampaignEscrow__ZeroPoints();
     error CampaignEscrow__InsufficientBalance(uint256 balance, uint256 amount);
     error CampaignEscrow__OnlyOwner(address caller, address owner);
+    error CampaignEscrow__OnlyRedeemer(address caller);
+    error CampaignEscrow__InvalidRedeemTarget(address user);
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
@@ -67,9 +70,9 @@ contract CampaignEscrow {
     }
 
     struct CampaignProof {
-        uint256 amountSpent;   // lifetime spent
-        uint256 amountBalance; // unspent balance
-        uint256 originalBlock; // first participation block (provenance)
+        uint256 totalBalance;    // lifetime earned (lineage — never shrinks)
+        uint256 unspentBalance;  // currently spendable (shrinks on redemption)
+        uint256 originalBlock;   // first participation block (provenance)
     }
 
     /// @notice Reset guard — every setting is stuck at its initial value after initialize().
@@ -85,6 +88,13 @@ contract CampaignEscrow {
     /// @notice The dedicated EOA that CRE `evm.write` submits verdicts from.
     address public workflowOwner;
 
+    /// @notice Admin who can manage redeemers. Set to the initializer (the factory).
+    address public owner;
+
+    /// @notice Whitelist of Company B (merchant) wallets allowed to redeem on
+    ///         behalf of users. Only they can trigger a redemption.
+    mapping(address => bool) public authorizedRedeemers;
+
     /*//////////////////////////////////////////////////////////////
                               INITIALIZER
     //////////////////////////////////////////////////////////////*/
@@ -96,6 +106,7 @@ contract CampaignEscrow {
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
         if (terms_.rateBps == 0) revert CampaignEscrow__ZeroPoints();
+        owner = msg.sender; // the factory (which cloned + initialized us)
         terms = terms_;
         workflowOwner = workflowOwner_;
     }
@@ -104,12 +115,10 @@ contract CampaignEscrow {
                                ADMIN
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Demo-scope admin: reassign the claim submitter. Owner = init caller
-    ///         (factory), who may be a platform EOA/Privy server wallet in the demo.
-    function setWorkflowOwner(address newOwner) external {
+    /// @notice Owner-only: grant/revoke Company B's right to redeem on behalf of users.
+    function setRedeemer(address wallet, bool allowed) external {
         _onlyOwner();
-        if (newOwner == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
-        workflowOwner = newOwner;
+        authorizedRedeemers[wallet] = allowed;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -134,11 +143,12 @@ contract CampaignEscrow {
         CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
         if (proof.originalBlock == 0) proof.originalBlock = block.number;
 
-        uint256 alreadyEarned = proof.amountSpent + proof.amountBalance;
+        uint256 alreadyEarned = proof.totalBalance;
         points = _computePoints(amountSpent, alreadyEarned);
 
-        // Guard against underflow on ledger updates (can't go negative).
-        proof.amountBalance += points;
+        // Unspent balance grows with each earn; totalBalance is the lifetime lineage.
+        proof.unspentBalance += points;
+        proof.totalBalance += points;
         usedNullifiers[nullifier] = true;
         emit Claim(nullifier, recipient, points, amountSpent);
 
@@ -156,39 +166,42 @@ contract CampaignEscrow {
     }
 
     /*//////////////////////////////////////////////////////////////
-                               REDEEM  (Privy wallet action)
+                        REDEEM  (Company B, merchant-only)
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Spend earned rewards. Called by the customer's Privy embedded wallet
-    ///         (Brand B page) when redeeming. Burns tokens as "spend"; ledger preserves
-    ///         lifetime lineage.
+    /// @notice Spend a user's earned rewards. Callable ONLY by an authorized Company B
+    ///         (merchant) wallet — the user redeems inside Company B's portal/app, and
+    ///         Company B's backend drives this on their behalf. Burns tokens as "spend";
+    ///         the ledger's `totalBalance` preserves lifetime lineage.
+    /// @param user The customer whose rewards are spent.
     /// @param amount Reward units to spend.
-    function redeem(uint256 amount) external {
+    function redeemFor(address user, uint256 amount) external {
+        _onlyRedeemer();
         _requireLive();
-        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][msg.sender];
-        if (proof.amountBalance < amount) {
-            revert CampaignEscrow__InsufficientBalance(proof.amountBalance, amount);
-        }
-        proof.amountBalance -= amount;
-        proof.amountSpent += amount;
+        if (user == address(0)) revert CampaignEscrow__InvalidRedeemTarget(address(0));
 
-        emit Redeem(msg.sender, amount);
-        CampaignReward(terms.reward).burn(msg.sender, terms.rewardTokenId, amount);
+        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][user];
+        if (proof.unspentBalance < amount) {
+            revert CampaignEscrow__InsufficientBalance(proof.unspentBalance, amount);
+        }
+        proof.unspentBalance -= amount; // totalBalance untouched (lineage preserved)
+
+        emit Redeem(user, amount);
+        CampaignReward(terms.reward).burn(user, terms.rewardTokenId, amount);
     }
 
     /*//////////////////////////////////////////////////////////////
                                 VIEWS
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Lifetime earned for a wallet (lineage-preserving).
+    /// @notice Lifetime earned for a wallet (lineage-preserving, never shrinks).
     function lifetimeEarned(address wallet) external view returns (uint256) {
-        CampaignProof storage p = campaignLedger[terms.rewardTokenId][wallet];
-        return p.amountSpent + p.amountBalance;
+        return campaignLedger[terms.rewardTokenId][wallet].totalBalance;
     }
 
-    /// @notice Available (unspent) balance for a wallet.
+    /// @notice Currently spendable balance for a wallet.
     function availableBalance(address wallet) external view returns (uint256) {
-        return campaignLedger[terms.rewardTokenId][wallet].amountBalance;
+        return campaignLedger[terms.rewardTokenId][wallet].unspentBalance;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -200,12 +213,16 @@ contract CampaignEscrow {
     }
 
     function _onlyOwner() internal view {
-        if (msg.sender != address(this)) revert CampaignEscrow__OnlyOwner(msg.sender, address(this));
+        if (msg.sender != owner) revert CampaignEscrow__OnlyOwner(msg.sender, owner);
     }
 
     function _requireLive() internal view {
         uint256 ts = block.timestamp;
         if (ts < terms.start) revert CampaignEscrow__CampaignNotLive(ts, terms.start, terms.end);
         if (ts > terms.end) revert CampaignEscrow__CampaignEnded(ts, terms.end);
+    }
+
+    function _onlyRedeemer() internal view {
+        if (!authorizedRedeemers[msg.sender]) revert CampaignEscrow__OnlyRedeemer(msg.sender);
     }
 }

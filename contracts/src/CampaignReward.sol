@@ -45,7 +45,7 @@ contract CampaignReward is ERC1155 {
     }
 
     /// @notice Burn tokens as "spend" on redemption. Callable only by this campaign's escrow,
-    ///         which validates the UTXO ledger (available = amountBalance) first.
+    ///         which validates the UTXO ledger (available = unspentBalance) first.
     function burn(address from, uint256 id, uint256 amount) external {
         _escrowOnly();
         _burn(from, id, amount);

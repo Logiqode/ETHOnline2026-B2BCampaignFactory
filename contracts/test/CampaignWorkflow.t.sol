@@ -185,16 +185,21 @@ contract CampaignWorkflowTest is Test {
     }
 
     /*//////////////////////////////////////////////////////////////
-                             REDEEM (Privy action)
+                    REDEEM (Company B, merchant-only)
     //////////////////////////////////////////////////////////////*/
 
     function test_RedeemBurnsAndUpdatesLedger() public {
-        vm.prank(workflowOwner);
+        vm.startPrank(workflowOwner);
         CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 12e18); // 1.20 earned
+        vm.stopPrank();
         assertEq(CampaignReward(rewardAddr).balanceOf(customer, rewardTokenId), 1.2e18);
 
-        vm.prank(customer);
-        CampaignEscrow(escrowAddr).redeem(1e18); // spend 1.00
+        // Authorize Brand B as the merchant redeemer
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+
+        vm.prank(brandB);
+        CampaignEscrow(escrowAddr).redeemFor(customer, 1e18); // merchant spends 1.00 on user
 
         assertEq(CampaignReward(rewardAddr).balanceOf(customer, rewardTokenId), 0.2e18, "0.20 left");
         assertEq(CampaignEscrow(escrowAddr).availableBalance(customer), 0.2e18, "ledger balance 0.20");
@@ -204,14 +209,49 @@ contract CampaignWorkflowTest is Test {
     function test_RedeemMoreThanBalanceReverts() public {
         vm.prank(workflowOwner);
         CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 12e18); // 1.20 earned
-        vm.prank(customer);
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
         vm.expectRevert(); // InsufficientBalance
-        CampaignEscrow(escrowAddr).redeem(2e18);
+        CampaignEscrow(escrowAddr).redeemFor(customer, 2e18);
     }
 
     function test_RedeemZeroDoesNothing() public {
-        vm.prank(customer);
-        CampaignEscrow(escrowAddr).redeem(0);
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        CampaignEscrow(escrowAddr).redeemFor(customer, 0);
         assertEq(CampaignEscrow(escrowAddr).availableBalance(customer), 0, "no-op");
+    }
+
+    function test_RedeemOnlyAuthorizedRedeemer() public {
+        vm.prank(workflowOwner);
+        CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 12e18); // give user points
+        // Customer themselves is NOT a redeemer → must revert
+        vm.prank(customer);
+        vm.expectRevert(); // OnlyRedeemer
+        CampaignEscrow(escrowAddr).redeemFor(customer, 1e18);
+        // Unauthorized attacker also reverts
+        vm.prank(attacker);
+        vm.expectRevert(); // OnlyRedeemer
+        CampaignEscrow(escrowAddr).redeemFor(customer, 1e18);
+    }
+
+    function test_RedeemRevokedRedeemer() public {
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, false);
+        vm.prank(brandB);
+        vm.expectRevert(); // OnlyRedeemer (revoked)
+        CampaignEscrow(escrowAddr).redeemFor(customer, 1e18);
+    }
+
+    function test_RedeemZeroTargetReverts() public {
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        vm.expectRevert(); // InvalidRedeemTarget
+        CampaignEscrow(escrowAddr).redeemFor(address(0), 1e18);
     }
 }
