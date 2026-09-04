@@ -1,0 +1,32 @@
+import { NavLink } from 'react-router-dom'
+
+const PAGES = [
+  { to: '/', label: 'Factory Console', end: true },
+  { to: '/brand-a', label: 'Brand A — POS' },
+  { to: '/brand-b', label: 'Brand B — Redeem' },
+]
+
+export default function Navbar() {
+  return (
+    <nav className="topbar">
+      <div className="brand">
+        <div className="brand-mark">B</div>
+        B2BCampaignFactory
+      </div>
+      <div className="nav-links">
+        {PAGES.map((p) => (
+          <NavLink
+            key={p.to}
+            to={p.to}
+            end={p.end}
+            className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+          >
+            {p.label}
+          </NavLink>
+        ))}
+      </div>
+      <div className="nav-spacer" />
+      <span className="nav-badge">Base Sepolia</span>
+    </nav>
+  )
+}
