@@ -47,6 +47,7 @@ contract CampaignEscrow {
     error CampaignEscrow__OnlyOwner(address caller, address owner);
     error CampaignEscrow__OnlyRedeemer(address caller);
     error CampaignEscrow__InvalidRedeemTarget(address user);
+    error CampaignEscrow__TooManyDecimals(uint256 value);
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
@@ -106,6 +107,7 @@ contract CampaignEscrow {
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
         if (terms_.rateBps == 0) revert CampaignEscrow__ZeroPoints();
+        _requireAtMost2Decimals(terms_.cap); // per-user cap should be cent-granular too
         owner = msg.sender; // the factory (which cloned + initialized us)
         terms = terms_;
         workflowOwner = workflowOwner_;
@@ -137,6 +139,7 @@ contract CampaignEscrow {
     {
         _onlyWorkflowOwner();
         _requireLive();
+        _requireAtMost2Decimals(amountSpent); // $3.125-style inputs rejected
 
         if (usedNullifiers[nullifier]) revert CampaignEscrow__NullifierAlreadyUsed(nullifier);
 
@@ -178,6 +181,7 @@ contract CampaignEscrow {
     function redeemFor(address user, uint256 amount) external {
         _onlyRedeemer();
         _requireLive();
+        _requireAtMost2Decimals(amount); // $3.125-style inputs rejected
         if (user == address(0)) revert CampaignEscrow__InvalidRedeemTarget(address(0));
 
         CampaignProof storage proof = campaignLedger[terms.rewardTokenId][user];
@@ -224,5 +228,13 @@ contract CampaignEscrow {
 
     function _onlyRedeemer() internal view {
         if (!authorizedRedeemers[msg.sender]) revert CampaignEscrow__OnlyRedeemer(msg.sender);
+    }
+
+    /// @dev Reject values with more than 2 decimals (i.e. finer than a cent).
+    ///      1 cent = 1e16 wei-style units; anything below that granularity would
+    ///      round/accumulate inconsistently. The workflow should ALSO validate this —
+    ///      this is input hygiene at the contract boundary, not a security gate.
+    function _requireAtMost2Decimals(uint256 value) internal pure {
+        if (value % 1e16 != 0) revert CampaignEscrow__TooManyDecimals(value);
     }
 }

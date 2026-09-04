@@ -254,4 +254,38 @@ contract CampaignWorkflowTest is Test {
         vm.expectRevert(); // InvalidRedeemTarget
         CampaignEscrow(escrowAddr).redeemFor(address(0), 1e18);
     }
+    /*//////////////////////////////////////////////////////////////
+                       DECIMAL GUARD (≤ 2 decimals)
+    //////////////////////////////////////////////////////////////*/
+
+    function test_ClaimRejectsTooManyDecimals() public {
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // TooManyDecimals — $3.125 has 3 decimals
+        CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 3.125e18);
+    }
+
+    function test_ClaimAllowsExactlyTwoDecimals() public {
+        vm.prank(workflowOwner);
+        uint256 points = CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 3.25e18); // $3.25
+        assertEq(points, 0.325e18, "10% of $3.25 = 0.325 Bpoints");
+    }
+
+    function test_RedeemForRejectsTooManyDecimals() public {
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        vm.expectRevert(); // TooManyDecimals — $3.125 has 3 decimals
+        CampaignEscrow(escrowAddr).redeemFor(customer, 3.125e18);
+    }
+
+    function test_RedeemForAllowsExactlyTwoDecimals() public {
+        // Give the user 1.20 then redeem exactly 1.20 (2 decimals)
+        vm.prank(workflowOwner);
+        CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 12e18); // 1.20 earned
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        CampaignEscrow(escrowAddr).redeemFor(customer, 1.2e18); // 2 decimals — ok
+        assertEq(CampaignEscrow(escrowAddr).availableBalance(customer), 0, "all spent");
+    }
 }

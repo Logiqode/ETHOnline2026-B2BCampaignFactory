@@ -16269,25 +16269,6 @@ function getAddressEncoder() {
   return transformEncoder(fixEncoderSize(getMemoizedBase58Encoder(), 32), (putativeAddress) => address(putativeAddress));
 }
 var ADDRESS_ENCODER = getAddressEncoder();
-function text(responseOrFn) {
-  if (typeof responseOrFn === "function") {
-    return {
-      result: () => text(responseOrFn().result)
-    };
-  } else {
-    const decoder = new TextDecoder("utf-8");
-    return decoder.decode(responseOrFn.body).trim();
-  }
-}
-function ok(responseOrFn) {
-  if (typeof responseOrFn === "function") {
-    return {
-      result: () => ok(responseOrFn().result)
-    };
-  } else {
-    return responseOrFn.statusCode >= 200 && responseOrFn.statusCode < 300;
-  }
-}
 function sendReport(runtime, report, fn) {
   const rawReport = report.x_generatedCodeOnly_unwrap();
   const request = fn(rawReport);
@@ -21655,44 +21636,53 @@ var sendErrorResponse = (error2) => {
 };
 var configSchema = exports_external.object({
   schedule: exports_external.string(),
-  url: exports_external.string(),
-  secretId: exports_external.string(),
-  scoreThreshold: exports_external.number()
+  campaignId: exports_external.number().int().nonnegative(),
+  minSpend: exports_external.number().nonnegative(),
+  rateBps: exports_external.number().int().positive(),
+  cap: exports_external.number().nonnegative(),
+  start: exports_external.number().int().nonnegative(),
+  end: exports_external.number().int().nonnegative(),
+  workflowOwner: exports_external.string(),
+  mockContractAddress: exports_external.string(),
+  testPayload: exports_external.object({
+    userAnchor: exports_external.string(),
+    merchantId: exports_external.string(),
+    amountSpent: exports_external.number().nonnegative(),
+    timestamp: exports_external.number().int().nonnegative(),
+    items: exports_external.array(exports_external.string()).optional()
+  })
 });
-var scoreResponse = (body) => {
-  let score = 0;
-  for (let i2 = 0;i2 < body.length; i2++) {
-    score = (score + body.charCodeAt(i2)) % 1000;
+function evaluateCampaign(payload, config) {
+  if (payload.timestamp < config.start) {
+    return { eligible: false, points: 0, reason: "before-campaign-start" };
   }
-  return score;
-};
+  if (payload.timestamp > config.end) {
+    return { eligible: false, points: 0, reason: "after-campaign-end" };
+  }
+  if (payload.amountSpent < config.minSpend) {
+    return { eligible: false, points: 0, reason: "below-min-spend" };
+  }
+  const points = Math.min(config.rateBps / 1e4 * payload.amountSpent, config.cap);
+  return { eligible: true, points, reason: "ok" };
+}
 var onCronTrigger = (runtime2) => {
   const config = runtime2.config;
-  const apiToken = runtime2.getSecret({ id: config.secretId }).result().value;
-  const response = new cre.capabilities.HTTPClient().sendRequest(runtime2, {
-    url: config.url,
-    method: "GET",
-    multiHeaders: {
-      Authorization: { values: [`Bearer ${apiToken}`] }
-    }
-  }).result();
-  if (!ok(response)) {
-    throw new Error(`Confidential request failed with status: ${response.statusCode}`);
-  }
-  const body = text(response);
-  const secretReachedApi = body.includes(apiToken);
-  const score = scoreResponse(body);
-  const verdict = score >= config.scoreThreshold ? "APPROVE" : "REJECT";
-  runtime2.log(`Enclave computation complete. verdict=${verdict}`);
+  const apiToken = runtime2.getSecret({ id: "API_TOKEN" }).result().value;
+  runtime2.log(`secret loaded (${apiToken.length} chars)`);
+  const payload = config.testPayload;
+  runtime2.log(`payload: userAnchor=${payload.userAnchor} merchant=${payload.merchantId}` + ` amountSpent=${payload.amountSpent} ts=${payload.timestamp} items=${(payload.items ?? []).length}`);
+  const verdict = evaluateCampaign(payload, config);
+  runtime2.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`);
   const donRuntime = runtime2.usingTheDons();
-  const encodedPayload = encodeAbiParameters(parseAbiParameters("string verdict, uint256 score"), [verdict, BigInt(score)]);
+  const reportPayload = encodeAbiParameters(parseAbiParameters("bool eligible, uint256 points"), [verdict.eligible, BigInt(Math.round(verdict.points * 1000000000000000000))]);
   donRuntime.report({
-    encodedPayload: hexToBase64(encodedPayload),
+    encodedPayload: hexToBase64(reportPayload),
     encoderName: "evm",
     signingAlgo: "ecdsa",
     hashingAlgo: "keccak256"
   }).result();
-  return `${verdict} (score: ${score}, secret reached API: ${secretReachedApi})`;
+  runtime2.log(`report-ready (not written): ${hexToBase64(reportPayload).slice(0, 32)}...`);
+  return `${verdict.eligible ? "APPROVE" : "REJECT"} points=${verdict.points} reason=${verdict.reason}`;
 };
 function initWorkflow(config) {
   const cronTrigger = new cre.capabilities.CronCapability;

@@ -1,46 +1,40 @@
 import { describe, expect } from 'bun:test'
 import type { TeeRuntime } from '@chainlink/cre-sdk'
 import { test } from '@chainlink/cre-sdk/test'
-import { initWorkflow, onCronTrigger } from './workflow'
+import { initWorkflow, onCronTrigger, type Config } from './workflow'
 
 const API_TOKEN = 'test-token'
 
-const makeConfig = () => ({
+// Campaign fixture matching config.staging.json (mock payload inside config).
+const makeConfig = (overrides: Partial<Config> = {}): Config => ({
 	schedule: '0 */1 * * * *',
-	url: 'https://postman-echo.com/headers',
-	secretId: 'API_TOKEN',
-	scoreThreshold: 500,
+	campaignId: 1,
+	minSpend: 10,
+	rateBps: 1000,
+	cap: 20,
+	start: 1700000000,
+	end: 1800000000,
+	workflowOwner: '0x0000000000000000000000000000000000000001',
+	mockContractAddress: '0x0000000000000000000000000000000000000002',
+	testPayload: {
+		userAnchor: '0x1234567890123456789012345678901234567890',
+		merchantId: 'burgera',
+		amountSpent: 12.0,
+		timestamp: 1757366400,
+		items: ['burger', 'fries'],
+	},
+	...overrides,
 })
 
-// The public test surface does not yet ship a TEE runtime factory
-// (`newTestRuntime` returns a DON `Runtime`), so we stand up the small slice of
-// `TeeRuntime` the handler actually uses: config, getSecret, callCapability
-// (which HTTPClient.sendRequest goes through), log, and usingTheDons.
-type FakeTeeRuntimeOptions = {
-	statusCode?: number
-	body?: string
-}
-
-const makeFakeTeeRuntime = ({ statusCode = 200, body = 'hello' }: FakeTeeRuntimeOptions = {}) => {
-	const capturedHeaders: string[] = []
-	const reports: unknown[] = []
+// Minimal TeeRuntime slice the handler uses: config, getSecret, log, usingTheDons.
+const makeFakeTeeRuntime = (config: Config) => {
 	const logs: string[] = []
-
+	const reports: unknown[] = []
 	const runtime = {
-		config: makeConfig(),
+		config,
 		getSecret: (request: { id?: string }) => ({
 			result: () => ({ id: request.id, value: API_TOKEN }),
 		}),
-		callCapability: ({ payload }: { payload: { multiHeaders?: Record<string, unknown> } }) => {
-			const auth = payload.multiHeaders?.Authorization as { values?: string[] } | undefined
-			capturedHeaders.push(...(auth?.values ?? []))
-			return {
-				result: () => ({
-					statusCode,
-					body: new TextEncoder().encode(body),
-				}),
-			}
-		},
 		log: (message: string) => logs.push(message),
 		usingTheDons: () => ({
 			report: (input: unknown) => {
@@ -49,36 +43,19 @@ const makeFakeTeeRuntime = ({ statusCode = 200, body = 'hello' }: FakeTeeRuntime
 			},
 		}),
 	}
-
-	return { runtime: runtime as unknown as TeeRuntime<ReturnType<typeof makeConfig>>, capturedHeaders, reports, logs }
+	return { runtime: runtime as unknown as TeeRuntime<Config>, logs, reports }
 }
 
-describe('onCronTrigger', () => {
-	test('injects the enclave-fetched secret into the outbound request', () => {
-		const { runtime, capturedHeaders } = makeFakeTeeRuntime()
+describe('onCronTrigger — campaign eligibility', () => {
+	test('APPROVEs an eligible purchase (>= minSpend, within window) and computes points', () => {
+		const { runtime, reports, logs } = makeFakeTeeRuntime(makeConfig())
 
-		onCronTrigger(runtime)
+		const result = onCronTrigger(runtime)
 
-		expect(capturedHeaders).toEqual([`Bearer ${API_TOKEN}`])
-	})
-
-	test('confirms the secret reached the API when the response echoes it back', () => {
-		const { runtime } = makeFakeTeeRuntime({ body: `{"authorization":"Bearer ${API_TOKEN}"}` })
-
-		expect(onCronTrigger(runtime)).toContain('secret reached API: true')
-	})
-
-	test('reports the secret did not reach the API when it is absent', () => {
-		const { runtime } = makeFakeTeeRuntime({ body: '{"authorization":"Bearer other"}' })
-
-		expect(onCronTrigger(runtime)).toContain('secret reached API: false')
-	})
-
-	test('crosses back to the DON to generate a report', () => {
-		const { runtime, reports } = makeFakeTeeRuntime()
-
-		onCronTrigger(runtime)
-
+		expect(result).toContain('APPROVE')
+		expect(result).toContain('points=1.2') // 10% of $12
+		expect(logs.some((l) => l.includes('eligibility: ok'))).toBe(true)
+		// report is prepared (crossed back to DON) even though write is commented
 		expect(reports).toHaveLength(1)
 		expect(reports[0]).toMatchObject({
 			encoderName: 'evm',
@@ -87,47 +64,40 @@ describe('onCronTrigger', () => {
 		})
 	})
 
-	test('APPROVEs when the confidential score clears the threshold', () => {
-		// 'zzzzzzzz' sums to 976, above the 500 threshold.
-		const { runtime } = makeFakeTeeRuntime({ body: 'zzzzzzzz' })
-
-		expect(onCronTrigger(runtime)).toContain('APPROVE')
-	})
-
-	test('REJECTs when the confidential score is below the threshold', () => {
-		// 'a' sums to 97, below the 500 threshold.
-		const { runtime } = makeFakeTeeRuntime({ body: 'a' })
-
+	test('REJECTs below min-spend', () => {
+		const { runtime } = makeFakeTeeRuntime(
+			makeConfig({ testPayload: { ...makeConfig().testPayload, amountSpent: 5 } }),
+		)
 		expect(onCronTrigger(runtime)).toContain('REJECT')
+		expect(onCronTrigger(runtime)).toContain('below-min-spend')
 	})
 
-	test('throws on a non-2xx response and never reaches the DON', () => {
-		const { runtime, reports } = makeFakeTeeRuntime({ statusCode: 401 })
-
-		expect(() => onCronTrigger(runtime)).toThrow('status: 401')
-		expect(reports).toHaveLength(0)
+	test('REJECTs before campaign start', () => {
+		const { runtime } = makeFakeTeeRuntime(
+			makeConfig({ testPayload: { ...makeConfig().testPayload, timestamp: 1600000000 } }),
+		)
+		expect(onCronTrigger(runtime)).toContain('before-campaign-start')
 	})
 
-	test('does not log the secret or the raw response body', () => {
-		const { runtime, logs } = makeFakeTeeRuntime({ body: 'sensitive-response' })
+	test('REJECTs after campaign end', () => {
+		const { runtime } = makeFakeTeeRuntime(
+			makeConfig({ testPayload: { ...makeConfig().testPayload, timestamp: 1900000000 } }),
+		)
+		expect(onCronTrigger(runtime)).toContain('after-campaign-end')
+	})
 
+	test('caps points at the per-user lifetime cap', () => {
+		// rate 10% of $500 = $50, but cap is 20 → capped at 20
+		const { runtime } = makeFakeTeeRuntime(
+			makeConfig({ testPayload: { ...makeConfig().testPayload, amountSpent: 500 } }),
+		)
+		expect(onCronTrigger(runtime)).toContain('points=20')
+	})
+
+	test('logs the payload and secret length (debug)', () => {
+		const { runtime, logs } = makeFakeTeeRuntime(makeConfig())
 		onCronTrigger(runtime)
-
-		for (const line of logs) {
-			expect(line).not.toContain(API_TOKEN)
-			expect(line).not.toContain('sensitive-response')
-		}
-	})
-})
-
-describe('initWorkflow', () => {
-	test('registers the cron handler with a Nitro TEE constraint', () => {
-		const handlers = initWorkflow(makeConfig())
-
-		expect(handlers).toHaveLength(1)
-		expect(handlers[0].fn).toBe(onCronTrigger)
-
-		// handlerInTee attaches TEE requirements; cre.handler does not.
-		expect(handlers[0].requirements).toBeDefined()
+		expect(logs.some((l) => l.includes('secret loaded'))).toBe(true)
+		expect(logs.some((l) => l.includes('payload:'))).toBe(true)
 	})
 })
