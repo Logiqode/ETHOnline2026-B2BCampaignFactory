@@ -7,3 +7,5 @@ AI USAGE:
 - Tools and or approaches recommended
 - Inconsistency checks
 - Smart contract writing and logic testing
+- Core logic writing into CRE Workflows
+- README writing
