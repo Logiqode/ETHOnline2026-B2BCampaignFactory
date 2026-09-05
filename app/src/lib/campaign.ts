@@ -61,7 +61,7 @@ export const REWARD_BLOCKS: RewardBlock[] = [
     state: 'enabled',
     fields: [
       { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10' },
-      { key: 'cashbackCap', label: 'Cashback cap / user (optional)', type: 'number', placeholder: '100' },
+      { key: 'cashbackCap', label: 'Cashback cap', type: 'number', placeholder: '100' },
       { key: 'cashbackToken', label: 'Point / token name', type: 'text', placeholder: 'Bpoints' },
     ],
   },

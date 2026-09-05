@@ -96,16 +96,14 @@ export default function CampaignWizard() {
   }
   const setRuleValue = (key: string, v: string | number | boolean) => setRuleValues((p) => ({ ...p, [key]: v }))
 
-  // Cashback and Discount are mutually exclusive. Turning one on turns the other off.
+  // Cashback and Discount are mutually exclusive AND one must always be active.
+  // Clicking a block selects it (the other turns off); you can never disable both.
   const toggleRewardBlock = (id: string) => {
     if (id === 'cashback' || id === 'discount') {
-      setRewardBlockStates((p) => {
-        const willEnable = p[id] !== 'enabled' ? 'enabled' : 'disabled'
-        return {
-          cashback: id === 'cashback' ? willEnable : 'disabled',
-          discount: id === 'discount' ? willEnable : 'disabled',
-        }
-      })
+      setRewardBlockStates(() => ({
+        cashback: id === 'cashback' ? 'enabled' : 'disabled',
+        discount: id === 'discount' ? 'enabled' : 'disabled',
+      }))
     } else {
       setRewardBlockStates((p) => ({ ...p, [id]: p[id] === 'enabled' ? 'disabled' : 'enabled' }))
     }
