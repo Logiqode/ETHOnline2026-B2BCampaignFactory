@@ -28,6 +28,13 @@ contract CampaignWorkflowTest is Test {
     uint256 public constant MIN_SPEND = 10e18; // $10
     uint256 public constant CAP = 20e18;       // $20
 
+    // Fee / deposit fixtures
+    address public constant COMPANY_A = address(0xA11CE);
+    address public constant COMPANY_B = address(0xB0B);
+    uint256 public constant FEE_SPLIT_BPS = 2500; // 25% A / 75% B
+    uint256 public constant PLATFORM_FEE_BPS = 1000; // 10%
+    address public constant PLATFORM_FEE_ACCOUNT = address(0xFEE);
+
     function _terms(uint64 start, uint64 end) internal pure returns (CampaignEscrow.CampaignTerms memory) {
         return CampaignEscrow.CampaignTerms({
             rateBps: RATE_BPS,
@@ -42,8 +49,28 @@ contract CampaignWorkflowTest is Test {
                 cap: CAP,
                 dayOfWeekEnabled: false,
                 daysOfWeek: 0
-            })
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
         });
+    }
+
+    // Convenience wrapper for the new createCampaign signature (payable, fee split, salt).
+    function _createCampaign(
+        CampaignEscrow.CampaignTerms memory terms,
+        address workflowOwner_,
+        string memory rewardUri,
+        bytes32 salt
+    ) internal returns (uint256 id) {
+        id = factory.createCampaign{value: factory.MIN_OPERATING_DEPOSIT()}(
+            terms,
+            workflowOwner_,
+            rewardUri,
+            salt,
+            COMPANY_A,
+            COMPANY_B,
+            FEE_SPLIT_BPS
+        );
     }
 
     function setUp() public {
@@ -55,7 +82,7 @@ contract CampaignWorkflowTest is Test {
         // Create a campaign: terms + workflowOwner + reward URI
         uint64 start = uint64(block.timestamp - 1 days);
         uint64 end = uint64(block.timestamp + 30 days);
-        campaignId = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
+        campaignId = _createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json", keccak256("salt-1"));
         (escrowAddr, rewardAddr, rewardTokenId, , ) = factory.campaigns(campaignId);
     }
 
@@ -67,7 +94,7 @@ contract CampaignWorkflowTest is Test {
         assertTrue(escrowAddr != address(0), "escrow deployed");
         assertTrue(rewardAddr != address(0), "reward deployed");
         assertEq(CampaignEscrow(escrowAddr).workflowOwner(), workflowOwner, "workflowOwner wired");
-        (uint256 rateBps_, , , address reward_, uint256 tokenId_, CampaignRulesLib.Rules memory rules_) =
+        (uint256 rateBps_, , , address reward_, uint256 tokenId_, CampaignRulesLib.Rules memory rules_, uint256 pfBps_, address pfAccount_) =
             CampaignEscrow(escrowAddr).terms();
         assertEq(rateBps_, RATE_BPS, "terms rate wired");
         assertEq(rules_.minSpend, MIN_SPEND, "terms minSpend wired");
@@ -76,13 +103,15 @@ contract CampaignWorkflowTest is Test {
         assertTrue(rules_.capEnabled, "cap rule enabled");
         assertEq(reward_, rewardAddr, "terms reward wired");
         assertEq(tokenId_, rewardTokenId, "terms tokenId wired");
+        assertEq(pfBps_, PLATFORM_FEE_BPS, "platform fee bps wired");
+        assertEq(pfAccount_, PLATFORM_FEE_ACCOUNT, "platform fee account wired");
         assertEq(rewardTokenId, factory.REWARD_TOKEN_RANGE(), "first campaign tokenId = 1 * RANGE");
     }
 
     function test_FactoryMultipleCampaignsIsolateState() public {
         uint64 start = uint64(block.timestamp - 1 hours);
         uint64 end = uint64(block.timestamp + 30 days);
-        uint256 id2 = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id2 = _createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json", keccak256("salt-2"));
         (address escrow2, address reward2, uint256 tokenId2, , ) = factory.campaigns(id2);
 
         assertTrue(escrowAddr != escrow2, "distinct escrow clones");
@@ -152,7 +181,7 @@ contract CampaignWorkflowTest is Test {
     function test_ClaimBeforeWindowReverts() public {
         uint64 start = uint64(block.timestamp + 1 days);
         uint64 end = uint64(block.timestamp + 30 days);
-        uint256 id = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id = _createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json", keccak256("salt-before"));
         (address esc, , , , ) = factory.campaigns(id);
         vm.prank(workflowOwner);
         vm.expectRevert(); // CampaignNotLive
@@ -162,7 +191,7 @@ contract CampaignWorkflowTest is Test {
     function test_ClaimAfterWindowReverts() public {
         uint64 start = uint64(block.timestamp - 30 days);
         uint64 end = uint64(block.timestamp - 1 days);
-        uint256 id = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id = _createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json", keccak256("salt-after"));
         (address esc, , , , ) = factory.campaigns(id);
         vm.prank(workflowOwner);
         vm.expectRevert(); // CampaignEnded
@@ -302,9 +331,11 @@ contract CampaignWorkflowTest is Test {
                 cap: cap,
                 dayOfWeekEnabled: dayOn,
                 daysOfWeek: daysOfWeek
-            })
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
         });
-        uint256 id = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encodePacked(minSpendOn, capOn, dayOn, start, end, block.timestamp)));
         (esc, , , , ) = factory.campaigns(id);
     }
 
@@ -488,5 +519,93 @@ contract CampaignWorkflowTest is Test {
         assertEq(CampaignEscrow(escA).lifetimeEarned(customer), 2e18, "A independent");
         assertEq(CampaignEscrow(escB).lifetimeEarned(customer), 20e18, "B independent (capped)");
         assertEq(CampaignEscrow(escC).lifetimeEarned(customer), 1.2e18, "C independent");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+            LAUNCH / DEPOSIT / FEE SPLIT / PLATFORM FEE
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice CREATE2: the predicted escrow address matches the actually deployed one.
+    function test_Create2DeterministicAddress() public view {
+        // The campaign created in setUp used salt keccak256("salt-1"); its escrow
+        // address must equal the factory's deterministic prediction.
+        assertEq(factory.predictEscrowAddress(keccak256("salt-1")), escrowAddr, "predicted == deployed");
+    }
+
+    /// @notice Operating deposit is split per the fee-split parameter.
+    function test_OperatingDepositSplit() public {
+        address a = address(0x1111);
+        address b = address(0x2222);
+        uint256 deposit = 1 ether;
+        // 25% A / 75% B of 1 ether
+        vm.deal(address(this), deposit);
+        uint256 id = factory.createCampaign{value: deposit}(
+            _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
+            workflowOwner,
+            "https://example.com/metadata/{id}.json",
+            keccak256("salt-split"),
+            a,
+            b,
+            2500
+        );
+        assertEq(a.balance, 0.25 ether, "A got 25%");
+        assertEq(b.balance, 0.75 ether, "B got 75%");
+    }
+
+    /// @notice Launch reverts if the operating deposit is below the minimum.
+    function test_DepositBelowMinimumReverts() public {
+        vm.expectRevert(); // CampaignFactory__DepositRequired
+        factory.createCampaign{value: 0}(
+            _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
+            workflowOwner,
+            "https://example.com/metadata/{id}.json",
+            keccak256("salt-low"),
+            COMPANY_A,
+            COMPANY_B,
+            FEE_SPLIT_BPS
+        );
+    }
+
+    /// @notice Launch reverts on an invalid fee split (> 10000 bps).
+    function test_InvalidFeeSplitReverts() public {
+        uint256 deposit = factory.MIN_OPERATING_DEPOSIT(); // hoist so expectRevert sees the NEXT call
+        vm.expectRevert(); // CampaignFactory__InvalidFeeSplit
+        factory.createCampaign{value: deposit}(
+            _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
+            workflowOwner,
+            "https://example.com/metadata/{id}.json",
+            keccak256("salt-fee"),
+            COMPANY_A,
+            COMPANY_B,
+            10_001
+        );
+    }
+
+    /// @notice Platform fee accrues on claims and redeems.
+    function test_PlatformFeeAccrues() public {
+        // Claim 1.20 (10% of $12). Platform fee 10% -> 0.12 accrued.
+        vm.prank(workflowOwner);
+        CampaignEscrow(escrowAddr).claim(keccak256("pf-1"), customer, 12e18);
+        assertEq(CampaignEscrow(escrowAddr).platformFeesAccrued(), 0.12e18, "fee after claim");
+
+        // Redeem 0.50. Platform fee 10% -> 0.05 accrued (total 0.17).
+        vm.prank(address(factory));
+        CampaignEscrow(escrowAddr).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        CampaignEscrow(escrowAddr).redeemFor(customer, 0.5e18);
+        assertEq(CampaignEscrow(escrowAddr).platformFeesAccrued(), 0.17e18, "fee after redeem");
+    }
+
+    /// @notice A zero platform fee accrues nothing.
+    function test_PlatformFeeZeroAccruesNothing() public {
+        uint64 start = uint64(block.timestamp);
+        uint64 end = uint64(block.timestamp + 30 days);
+        CampaignEscrow.CampaignTerms memory t = _terms(start, end);
+        t.platformFeeBps = 0;
+        uint256 id = _createCampaign(t, workflowOwner, "https://example.com/metadata/{id}.json", keccak256("salt-nofee"));
+        (address esc, , , , ) = factory.campaigns(id);
+        vm.prank(workflowOwner);
+        CampaignEscrow(esc).claim(keccak256("nf"), customer, 12e18);
+        assertEq(CampaignEscrow(esc).platformFeesAccrued(), 0, "no fee when bps=0");
     }
 }

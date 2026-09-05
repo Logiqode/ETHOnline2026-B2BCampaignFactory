@@ -67,6 +67,8 @@ contract CampaignEscrow {
         address reward;                   // paired CampaignReward (ERC-1155)
         uint256 rewardTokenId;
         CampaignRulesLib.Rules rules;     // toggleable eligibility gates (see CampaignRulesLib)
+        uint256 platformFeeBps;           // per-transaction platform fee uplift, e.g. 1000 = 10%
+        address platformFeeAccount;       // where the platform fee accrues
     }
 
     struct CampaignProof {
@@ -94,6 +96,12 @@ contract CampaignEscrow {
     /// @notice Whitelist of Company B (merchant) wallets allowed to redeem on
     ///         behalf of users. Only they can trigger a redemption.
     mapping(address => bool) public authorizedRedeemers;
+
+    /// @notice Cumulative platform fee accrued (mock-denominated reward units).
+    ///         In the demo the escrow doesn't custody ETH — this tracks the per-tx
+    ///         platform-fee uplift (platformFeeBps of each claim/redeem) so the
+    ///         operating-fund model is testable without real settlement.
+    uint256 public platformFeesAccrued;
 
     /*//////////////////////////////////////////////////////////////
                               INITIALIZER
@@ -160,6 +168,7 @@ contract CampaignEscrow {
         proof.unspentBalance += points;
         proof.totalBalance += points;
         usedNullifiers[nullifier] = true;
+        _accruePlatformFee(points);
         emit Claim(nullifier, recipient, points, amountSpent);
 
         CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
@@ -193,6 +202,7 @@ contract CampaignEscrow {
         }
         proof.unspentBalance -= amount; // totalBalance untouched (lineage preserved)
 
+        _accruePlatformFee(amount);
         emit Redeem(user, amount);
         CampaignReward(terms.reward).burn(user, terms.rewardTokenId, amount);
     }
@@ -231,6 +241,14 @@ contract CampaignEscrow {
 
     function _onlyRedeemer() internal view {
         if (!authorizedRedeemers[msg.sender]) revert CampaignEscrow__OnlyRedeemer(msg.sender);
+    }
+
+    /// @dev Accrue the per-transaction platform fee (platformFeeBps of `amount`) to the
+    ///      platform's running total. In the demo this is a mock-denominated counter, not
+    ///      an ETH transfer — the operating-fund settlement is deferred.
+    function _accruePlatformFee(uint256 amount) internal {
+        if (terms.platformFeeBps == 0) return;
+        platformFeesAccrued += (amount * terms.platformFeeBps) / 10_000;
     }
 
     /// @dev Reject values with more than 2 decimals (i.e. finer than a cent).
