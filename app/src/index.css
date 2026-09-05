@@ -424,6 +424,25 @@ textarea.input {
   margin-bottom: 0;
 }
 
+.field-suffix {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Full-width helper text below a rule's config grid (spans the whole block) */
+.rule-config-hint {
+  display: block;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.rule-config-hint .field-hint {
+  margin-top: 0;
+}
+
 /* Brand rows */
 .brand-row {
   display: flex;

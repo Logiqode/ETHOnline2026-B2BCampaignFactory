@@ -45,7 +45,7 @@ export interface RuleField {
   key: string
   label: string
   hint?: string
-  type: 'number' | 'text' | 'datetime' | 'select' | 'multi'
+  type: 'number' | 'text' | 'datetime' | 'select' | 'multi' | 'time'
   options?: string[]
   placeholder?: string
 }
@@ -103,12 +103,17 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     id: 'reward-cap',
     name: 'Reward cap / user',
     description: 'Lifetime or periodic reward cap per user.',
-    guide: 'Caps cumulative rewards per customer. Pick a reset period (lifetime, or every N years/months/weeks/days).',
+    guide: 'Caps cumulative rewards per customer. Pick a reset period — Lifetime, or every N days/weeks/months/years.',
     state: 'enabled',
     fields: [
       { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' },
       { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day'] },
       { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1' },
+      { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Rolling', 'Calendar'], hint: 'Rolling: window starts at the user\'s first earn in the current window — earns don\'t slide it, and after it expires the next earn re-anchors (counter resets). Calendar: fixed boundaries, e.g. every Monday 00:00.' },
+      { key: 'capResetWeekday', label: 'Reset on', type: 'select', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], hint: 'Only for Calendar + Week — the weekday boundary.' },
+      { key: 'capResetDay', label: 'Reset on day', type: 'number', placeholder: '1', hint: 'Only for Calendar + Month/Year — the day of month (1-31).' },
+      { key: 'capResetMonth', label: 'Reset month', type: 'select', options: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], hint: 'Only for Calendar + Year — the month boundary.' },
+      { key: 'capResetTime', label: 'Reset time', type: 'time', hint: 'Only for Calendar basis — the time of the boundary.' },
     ],
   },
   {
@@ -221,3 +226,12 @@ export const TIMEZONES = [
 ] as const
 
 export type Timezone = (typeof TIMEZONES)[number]['value']
+
+// Short abbreviation for a timezone (e.g. 'UTC', 'CET', 'JST') derived from its
+// label, for compact display beside time fields.
+export function timezoneAbbr(tz: Timezone): string {
+  const entry = TIMEZONES.find((t) => t.value === tz)
+  if (!entry) return tz
+  const m = entry.label.match(/\(([A-Z+]+)[,)]/)
+  return m ? m[1] : tz
+}

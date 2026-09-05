@@ -7,6 +7,7 @@ import {
   REWARD_BLOCKS,
   REWARD_TYPES,
   TIMEZONES,
+  timezoneAbbr,
   type BrandParticipant,
   type BrandRole,
   type RewardType,
@@ -41,6 +42,11 @@ const DEFAULT_RULE_VALUES: Record<string, string | number> = {
   cap: 100,
   capPeriod: 'Lifetime',
   capPeriodCount: 1,
+  capResetBasis: 'Rolling',
+  capResetWeekday: 'Monday',
+  capResetDay: 1,
+  capResetMonth: 'January',
+  capResetTime: '00:00',
   day: '',
   tier: 'Tier 2',
   period: 30,
@@ -141,8 +147,20 @@ export default function CampaignWizard() {
     if (ruleStates['reward-cap'] === 'enabled') {
       const capPeriod = ruleValues.capPeriod
       const capCount = Number(ruleValues.capPeriodCount || 1)
-      const periodLabel = capPeriod === 'Lifetime' ? 'lifetime' : `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''}`
-      rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (${periodLabel})` })
+      if (capPeriod === 'Lifetime') {
+        rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime)` })
+      } else {
+        const basis = ruleValues.capResetBasis === 'Calendar' ? 'calendar' : 'rolling'
+        let periodLabel = `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''} (${basis})`
+        if (ruleValues.capResetBasis === 'Calendar') {
+          const tz = timezoneAbbr(terms.timezone)
+          if (capPeriod === 'Week') periodLabel += `, resets ${ruleValues.capResetWeekday} ${ruleValues.capResetTime} ${tz}`
+          else if (capPeriod === 'Month') periodLabel += `, resets on day ${ruleValues.capResetDay} ${ruleValues.capResetTime} ${tz}`
+          else if (capPeriod === 'Year') periodLabel += `, resets ${ruleValues.capResetMonth} ${ruleValues.capResetDay} ${ruleValues.capResetTime} ${tz}`
+          else periodLabel += `, resets ${ruleValues.capResetTime} ${tz}`
+        }
+        rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (${periodLabel})` })
+      }
     }
     if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${capUnit}${terms.totalRedeemCap.toLocaleString()}${capSuffix}` })
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
@@ -200,32 +218,33 @@ export default function CampaignWizard() {
         <div className="card">
           <div className="card-title">Campaign Terms</div>
           <div className="card-desc">Structural baseline — the campaign's envelope.</div>
-          <div className="field">
-            <label className="field-label">Start</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input className="input" style={{ flex: 1 }} type="datetime-local" value={terms.start} onChange={(e) => setTerm('start', e.target.value)} />
-              <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="Start timezone">
-                {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
-              </select>
+          <div className="grid-2">
+            <div className="field">
+              <label className="field-label">Start</label>
+              <input className="input" type="datetime-local" value={terms.start} onChange={(e) => setTerm('start', e.target.value)} />
+            </div>
+            <div className="field">
+              <div className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>End date</span>
+                <button className={`rule-toggle${terms.noEndDate ? ' on' : ''}`} onClick={() => setTerm('noEndDate', !terms.noEndDate)} aria-pressed={terms.noEndDate} aria-label="No end date">
+                  <span className="rule-toggle-knob" />
+                </button>
+                <span className="field-hint" style={{ margin: 0 }}>No end date</span>
+              </div>
+              {terms.noEndDate ? (
+                <input className="input" type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} disabled style={{ opacity: 0.5 }} />
+              ) : (
+                <input className="input" type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} />
+              )}
+              <span className="field-hint">{terms.noEndDate ? 'No end date — campaign runs indefinitely.' : 'Campaign ends at this datetime.'}</span>
             </div>
           </div>
-          <div className="field">
-            <label className="field-label">End date</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button className={`rule-toggle${terms.noEndDate ? ' on' : ''}`} onClick={() => setTerm('noEndDate', !terms.noEndDate)} aria-pressed={terms.noEndDate} aria-label="No end date">
-                <span className="rule-toggle-knob" />
-              </button>
-              <span className="field-hint" style={{ margin: 0 }}>No end date</span>
-            </div>
-            {!terms.noEndDate && (
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <input className="input" style={{ flex: 1 }} type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} />
-                <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="End timezone">
-                  {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
-                </select>
-              </div>
-            )}
-            <span className="field-hint">{terms.noEndDate ? 'No end date — campaign runs indefinitely.' : 'Campaign ends at this datetime.'}</span>
+          <div className="field" style={{ marginTop: 8 }}>
+            <label className="field-label">Timezone</label>
+            <select className="select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="Timezone">
+              {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+            </select>
+            <span className="field-hint">Applies to the whole campaign — Start, End, and all time-based rules.</span>
           </div>
           <div className="field">
             <label className="field-label">Total redeem cap (campaign)</label>
@@ -355,16 +374,44 @@ export default function CampaignWizard() {
                     <div className="rule-desc" style={{ color: 'var(--text-tertiary)' }}>{rule.guide}</div>
                     <div className={`rule-config ${rule.fields.length === 1 ? 'full' : ''}`}>
                       {rule.fields.map((field) => {
-                        // For reward-cap: hide the "Every N" count field when period is Lifetime.
-                        if (field.key === 'capPeriodCount' && ruleValues.capPeriod === 'Lifetime') return null
+                        // For reward-cap: hide "Every N" + reset-basis + calendar-boundary fields as appropriate.
+                        if (ruleValues.capPeriod === 'Lifetime' && (field.key === 'capPeriodCount' || field.key === 'capResetBasis' || field.key === 'capResetWeekday' || field.key === 'capResetDay' || field.key === 'capResetMonth' || field.key === 'capResetTime')) return null
+                        // Calendar-boundary fields only show for Calendar basis.
+                        if ((field.key === 'capResetWeekday' || field.key === 'capResetDay' || field.key === 'capResetMonth' || field.key === 'capResetTime') && ruleValues.capResetBasis !== 'Calendar') return null
+                        // Weekday boundary only for Week; day-of-month for Month/Year; month only for Year.
+                        if (field.key === 'capResetWeekday' && ruleValues.capPeriod !== 'Week') return null
+                        if (field.key === 'capResetDay' && ruleValues.capPeriod !== 'Month' && ruleValues.capPeriod !== 'Year') return null
+                        if (field.key === 'capResetMonth' && ruleValues.capPeriod !== 'Year') return null
                         return (
                           <div className="field" key={field.key}>
                             <label className="field-label">{field.label}</label>
-                            <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                            {field.key === 'capPeriodCount' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                                <span className="field-suffix">{String(ruleValues.capPeriod).toLowerCase()}{Number(ruleValues[field.key] || 1) > 1 ? 's' : ''}</span>
+                              </div>
+                            ) : field.key === 'cap' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                                <span className="field-suffix">{assetLabel}</span>
+                              </div>
+                            ) : field.type === 'time' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                                <span className="field-suffix">{timezoneAbbr(terms.timezone)}</span>
+                              </div>
+                            ) : (
+                              <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                            )}
                           </div>
                         )
                       })}
                     </div>
+                    {rule.fields.some((f) => f.hint) && (
+                      <div className="rule-config-hint">
+                        {rule.fields.filter((f) => f.hint).map((f) => <span key={f.key} className="field-hint">{f.hint}</span>)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -376,7 +423,7 @@ export default function CampaignWizard() {
       {/* ── Summary + launch ── */}
       <div className="card">
         <div className="card-title">Campaign summary</div>
-        <div className="card-desc">What the confidential workflow will enforce.</div>
+        <div className="card-desc">What the campaign will enforce.</div>
         {summary.map((row) => (
           <div className="insight-row" key={row.label}>
             <span className="insight-label">{row.label}</span>
@@ -429,6 +476,9 @@ function RuleInput({ field, value, onChange }: { field: { key: string; label: st
         ))}
       </div>
     )
+  }
+  if (field.type === 'time') {
+    return <input className="input" type="time" value={String(value)} onChange={(e) => onChange(e.target.value)} />
   }
   return <input className="input" type="text" value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} />
 }
