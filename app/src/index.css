@@ -574,6 +574,14 @@ textarea.input {
   flex-shrink: 0;
 }
 
+/* Compact fee-split field (two companies, hackathon scope) */
+.fee-split-input {
+  width: 88px;
+  flex-shrink: 0;
+  text-align: right;
+  padding: 9px 10px;
+}
+
 /* Digital merchandise extra fields */
 .reward-digital-fields {
   display: grid;

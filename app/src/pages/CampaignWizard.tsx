@@ -76,12 +76,44 @@ const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
 }
 
 // ─── Launch / operating fee (mirrors CampaignFactory) ──────────
-// feeSplitBps = Company A's share of the operating deposit (basis points),
-// Company B gets the remainder — matches the contract's _splitDeposit.
+// Both fee-split fields are editable raw strings in the current display unit
+// (bps integer or % with 2 decimals). Whichever side was edited last drives
+// the other as the complement, so the two always total 100%.
 const DEFAULT_LAUNCH = {
-  feeSplitBps: 5000,
+  feeSplitA: '5000',
+  feeSplitB: '5000',
+  feeSplitLast: 'a' as 'a' | 'b',
+  feeSplitUnit: 'bps' as 'bps' | 'pct',
   companyAFeeAddress: '0x1111111111111111111111111111111111111111',
   companyBFeeAddress: '0x2222222222222222222222222222222222222222',
+}
+
+// Parse a fee-split text (either company's) into basis points (0–10000).
+// Tolerates partial input like "" or "12." while typing; falls back to 0
+// until valid.
+function parseSplitBps(text: string, unit: 'bps' | 'pct'): number {
+  const num = Number(text)
+  if (Number.isNaN(num)) return 0
+  const bps = Math.round(unit === 'pct' ? num * 100 : num)
+  return Math.min(Math.max(bps, 0), 10000)
+}
+
+// Format basis points for display in the given unit (% always shows 2 decimals).
+function formatSplit(bps: number, unit: 'bps' | 'pct'): string {
+  return unit === 'pct' ? (bps / 100).toFixed(2) : String(bps)
+}
+
+// Keystroke validator: only accept text matching the unit's precision AND
+// within range — % allows up to 2 decimals and max 100, bps is whole numbers
+// max 10000. Extra digits or out-of-range values are rejected while typing.
+function isValidSplitText(v: string, unit: 'bps' | 'pct'): boolean {
+  if (v === '') return true
+  if (unit === 'pct') {
+    if (!/^\d{0,3}(\.\d{0,2})?$/.test(v)) return false
+    return Number(v) <= 100
+  }
+  if (!/^\d{0,5}$/.test(v)) return false
+  return Number(v) <= 10000
 }
 
 export default function CampaignWizard() {
@@ -152,6 +184,12 @@ export default function CampaignWizard() {
     const rows: { label: string; value: string; mono?: boolean }[] = []
     rows.push({ label: 'Campaign', value: description.campaignName || '—' })
     rows.push({ label: 'Brands', value: description.participants.map((p) => `${p.name} (${BRAND_ROLES.find((r) => r.value === p.role)?.short})`).join(' · ') })
+    // Fee split — resolve from the last-edited side; show both as bps and %.
+    const aBps = launch.feeSplitLast === 'a' ? parseSplitBps(launch.feeSplitA, launch.feeSplitUnit) : 10000 - parseSplitBps(launch.feeSplitB, launch.feeSplitUnit)
+    const bBps = 10000 - aBps
+    const aName = description.participants.find((p) => p.role === 'pos')?.name || 'Company A'
+    const bName = description.participants.find((p) => p.role === 'reward')?.name || 'Company B'
+    rows.push({ label: 'Fee split', value: `${aName} ${aBps} bps (${(aBps / 100).toFixed(2)}%) : ${bName} ${bBps} bps (${(bBps / 100).toFixed(2)}%)`, mono: true })
     const rewardParts: string[] = []
     // Cashback/discount only apply to monetary rewards.
     if (rewardType === 'monetary') {
@@ -183,7 +221,7 @@ export default function CampaignWizard() {
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap}`, mono: true })
     return rows
-  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix])
+  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix, launch])
 
   const enabledRules = Object.values(ruleStates).filter((s) => s === 'enabled').length
   const prodLimited = Object.values(ruleStates).filter((s) => s === 'production-limited').length
@@ -203,7 +241,7 @@ export default function CampaignWizard() {
         mechanics: { rewardType, rewardBlocks: rewardBlockStates, rewardValues },
         terms: { ...terms, start: terms.start, end: terms.noEndDate ? undefined : terms.end, noEndDate: terms.noEndDate },
         rules: { ruleStates, ruleValues },
-        feeSplitBps: Number(launch.feeSplitBps) || 0,
+        feeSplitBps: launch.feeSplitLast === 'a' ? parseSplitBps(launch.feeSplitA, launch.feeSplitUnit) : 10000 - parseSplitBps(launch.feeSplitB, launch.feeSplitUnit),
         companyA: launch.companyAFeeAddress,
         companyB: launch.companyBFeeAddress,
         companyAName: description.participants.find((p) => p.role === 'pos')?.name ?? '',
@@ -275,14 +313,87 @@ export default function CampaignWizard() {
           </div>
 
           <div className="field" style={{ marginTop: 12 }}>
-            <label className="field-label">Operating fee split (Company A)</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input className="input" type="number" min={0} max={10000} value={launch.feeSplitBps} onChange={(e) => setLaunchField('feeSplitBps', Number(e.target.value))} />
-              <span className="field-suffix">bps</span>
+            <label className="field-label">Operating fee split</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {/* Company A */}
+              <span className="field-suffix" style={{ margin: 0 }}>{description.participants.find((p) => p.role === 'pos')?.name || 'Company A'}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <input
+                  className="input fee-split-input"
+                  type="text"
+                  inputMode="decimal"
+                  value={launch.feeSplitLast === 'a' ? launch.feeSplitA : formatSplit(10000 - parseSplitBps(launch.feeSplitB, launch.feeSplitUnit), launch.feeSplitUnit)}
+                  onChange={(e) => {
+                    // Only accept text matching the unit's precision (2 decimals
+                    // for %, whole numbers for bps); extra digits are rejected.
+                    const v = e.target.value
+                    if (isValidSplitText(v, launch.feeSplitUnit)) {
+                      setLaunch((p) => ({ ...p, feeSplitA: v, feeSplitLast: 'a' }))
+                    }
+                  }}
+                  onBlur={() => {
+                    // Normalize partial input on blur: "12." → "12", "" → "0"
+                    const num = Number(launch.feeSplitA)
+                    setLaunchField('feeSplitA', Number.isNaN(num) || launch.feeSplitA === '' ? '0' : String(num))
+                  }}
+                />
+                <span className="field-suffix" style={{ margin: 0 }}>{launch.feeSplitUnit === 'pct' ? '%' : 'bps'}</span>
+              </div>
+              <span style={{ color: 'var(--text-tertiary)' }}>:</span>
+              {/* Company B (editable too — A becomes the complement) */}
+              <span className="field-suffix" style={{ margin: 0 }}>{description.participants.find((p) => p.role === 'reward')?.name || 'Company B'}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <input
+                  className="input fee-split-input"
+                  type="text"
+                  inputMode="decimal"
+                  value={launch.feeSplitLast === 'b' ? launch.feeSplitB : formatSplit(10000 - parseSplitBps(launch.feeSplitA, launch.feeSplitUnit), launch.feeSplitUnit)}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    if (isValidSplitText(v, launch.feeSplitUnit)) {
+                      setLaunch((p) => ({ ...p, feeSplitB: v, feeSplitLast: 'b' }))
+                    }
+                  }}
+                  onBlur={() => {
+                    const num = Number(launch.feeSplitB)
+                    setLaunchField('feeSplitB', Number.isNaN(num) || launch.feeSplitB === '' ? '0' : String(num))
+                  }}
+                />
+                <span className="field-suffix" style={{ margin: 0 }}>{launch.feeSplitUnit === 'pct' ? '%' : 'bps'}</span>
+              </div>
             </div>
             <span className="field-hint">
-              Company A's share of the launch operating deposit (0–10000 bps). Company B gets the remainder — matches the contract's fee split.
+              Split the launch operating deposit between the two brands. Edit either side; the other adjusts automatically to total 100%.
             </span>
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <label className="field-label" style={{ margin: 0 }}>Input as</label>
+              <div className="segmented" role="radiogroup">
+                <button
+                  className={launch.feeSplitUnit === 'bps' ? 'active' : ''}
+                  onClick={() => {
+                    // switch to bps: re-derive both fields from the resolved split
+                    if (launch.feeSplitUnit !== 'bps') {
+                      const aBps = launch.feeSplitLast === 'a' ? parseSplitBps(launch.feeSplitA, 'pct') : 10000 - parseSplitBps(launch.feeSplitB, 'pct')
+                      setLaunch((p) => ({ ...p, feeSplitUnit: 'bps', feeSplitA: String(aBps), feeSplitB: String(10000 - aBps) }))
+                    }
+                  }}
+                  role="radio"
+                  aria-checked={launch.feeSplitUnit === 'bps'}
+                >bps</button>
+                <button
+                  className={launch.feeSplitUnit === 'pct' ? 'active' : ''}
+                  onClick={() => {
+                    // switch to %: re-derive both fields from the resolved split
+                    if (launch.feeSplitUnit !== 'pct') {
+                      const aBps = launch.feeSplitLast === 'a' ? parseSplitBps(launch.feeSplitA, 'bps') : 10000 - parseSplitBps(launch.feeSplitB, 'bps')
+                      setLaunch((p) => ({ ...p, feeSplitUnit: 'pct', feeSplitA: formatSplit(aBps, 'pct'), feeSplitB: formatSplit(10000 - aBps, 'pct') }))
+                    }
+                  }}
+                  role="radio"
+                  aria-checked={launch.feeSplitUnit === 'pct'}
+                >%</button>
+              </div>
+            </div>
           </div>
           <div className="field">
             <label className="field-label">Company A fee address</label>
