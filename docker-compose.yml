@@ -1,0 +1,26 @@
+# Wizard local state — Postgres for campaign drafts/launch state.
+# `docker compose up -d` gives a fresh clone a ready DB with no local installs.
+#
+# Port 5433 (not 5432) so the container never collides with a host-local Postgres.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: wizard-db
+    environment:
+      POSTGRES_USER: wizard
+      POSTGRES_PASSWORD: wizard
+      POSTGRES_DB: wizard
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wizard -d wizard"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

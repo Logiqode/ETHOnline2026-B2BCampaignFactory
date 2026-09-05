@@ -75,6 +75,15 @@ const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
   digitalTransferable: true,
 }
 
+// ─── Launch / operating fee (mirrors CampaignFactory) ──────────
+// feeSplitBps = Company A's share of the operating deposit (basis points),
+// Company B gets the remainder — matches the contract's _splitDeposit.
+const DEFAULT_LAUNCH = {
+  feeSplitBps: 5000,
+  companyAFeeAddress: '0x1111111111111111111111111111111111111111',
+  companyBFeeAddress: '0x2222222222222222222222222222222222222222',
+}
+
 export default function CampaignWizard() {
   const [description, setDescription] = useState(DEFAULT_DESCRIPTION)
   const [terms, setTerms] = useState(DEFAULT_TERMS)
@@ -84,7 +93,14 @@ export default function CampaignWizard() {
   const [rewardBlockStates, setRewardBlockStates] = useState<Record<string, 'enabled' | 'disabled'>>(DEFAULT_REWARD_BLOCK_STATES)
   const [rewardValues, setRewardValues] = useState<Record<string, string | number | boolean>>(DEFAULT_REWARD_VALUES)
   const [redeemCapEnabled, setRedeemCapEnabled] = useState(true)
+  const [launch, setLaunch] = useState(DEFAULT_LAUNCH)
   const [launched, setLaunched] = useState(false)
+  const [launchResult, setLaunchResult] = useState<{ id: string; salt: string } | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const setLaunchField = <K extends keyof typeof DEFAULT_LAUNCH>(k: K, v: (typeof DEFAULT_LAUNCH)[K]) =>
+    setLaunch((p) => ({ ...p, [k]: v }))
 
   const setDesc = <K extends keyof typeof DEFAULT_DESCRIPTION>(k: K, v: (typeof DEFAULT_DESCRIPTION)[K]) =>
     setDescription((p) => ({ ...p, [k]: v }))
@@ -173,6 +189,51 @@ export default function CampaignWizard() {
   const prodLimited = Object.values(ruleStates).filter((s) => s === 'production-limited').length
   const enabledRewardBlocks = Object.values(rewardBlockStates).filter((s) => s === 'enabled').length
 
+  // ── Launch: POST draft → POST launch. Creates the campaign in the local DB,
+  // ── then validates launch (fee split, fee accounts, deposit) and marks it
+  // ── launched with a generated CREATE2 salt. On-chain createCampaign wiring
+  // ── is still pending, so addresses stay null — the salt is the launch artifact.
+  const launchCampaign = async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const payload = {
+        name: description.campaignName,
+        rewardType: 'monetary',
+        mechanics: { rewardType, rewardBlocks: rewardBlockStates, rewardValues },
+        terms: { ...terms, start: terms.start, end: terms.noEndDate ? undefined : terms.end, noEndDate: terms.noEndDate },
+        rules: { ruleStates, ruleValues },
+        feeSplitBps: Number(launch.feeSplitBps) || 0,
+        companyA: launch.companyAFeeAddress,
+        companyB: launch.companyBFeeAddress,
+        companyAName: description.participants.find((p) => p.role === 'pos')?.name ?? '',
+        companyBName: description.participants.find((p) => p.role === 'reward')?.name ?? '',
+      }
+      const saveRes = await fetch('http://localhost:4000/api/campaigns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({ error: `HTTP ${saveRes.status}` }))
+        throw new Error(err.error || `HTTP ${saveRes.status}`)
+      }
+      const saved = await saveRes.json()
+      const launchRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/launch`, { method: 'POST' })
+      if (!launchRes.ok) {
+        const err = await launchRes.json().catch(() => ({ error: `HTTP ${launchRes.status}` }))
+        throw new Error(err.error || `HTTP ${launchRes.status}`)
+      }
+      const launchedCampaign = await launchRes.json()
+      setLaunchResult({ id: String(launchedCampaign.id), salt: launchedCampaign.salt })
+      setLaunched(true)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Launch failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -211,6 +272,25 @@ export default function CampaignWizard() {
               </div>
             ))}
             <button className="add-brand" disabled title="Coming soon">+ Add Another Company</button>
+          </div>
+
+          <div className="field" style={{ marginTop: 12 }}>
+            <label className="field-label">Operating fee split (Company A)</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input className="input" type="number" min={0} max={10000} value={launch.feeSplitBps} onChange={(e) => setLaunchField('feeSplitBps', Number(e.target.value))} />
+              <span className="field-suffix">bps</span>
+            </div>
+            <span className="field-hint">
+              Company A's share of the launch operating deposit (0–10000 bps). Company B gets the remainder — matches the contract's fee split.
+            </span>
+          </div>
+          <div className="field">
+            <label className="field-label">Company A fee address</label>
+            <input className="input mono" value={launch.companyAFeeAddress} onChange={(e) => setLaunchField('companyAFeeAddress', e.target.value)} placeholder="0x…" />
+          </div>
+          <div className="field">
+            <label className="field-label">Company B fee address</label>
+            <input className="input mono" value={launch.companyBFeeAddress} onChange={(e) => setLaunchField('companyBFeeAddress', e.target.value)} placeholder="0x…" />
           </div>
         </div>
 
@@ -434,15 +514,18 @@ export default function CampaignWizard() {
         ))}
         <div className="launch-panel" style={{ marginTop: 16 }}>
           <div className="launch-info">
-            {launched ? <strong>Deployed — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · one click, contract deployment gas is free</>}
+            {launched ? <strong>Launched — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · saves a draft, then validates + launches</>}
           </div>
-          <button className="btn btn-primary" onClick={() => setLaunched(true)} disabled={launched}>
-            {launched ? 'Deployed ✓' : 'Launch Campaign'}
+          <button className="btn btn-primary" onClick={launchCampaign} disabled={launched || saving}>
+            {saving ? 'Launching…' : launched ? 'Launched ✓' : 'Launch Campaign'}
           </button>
         </div>
-        {launched && (
+        {saveError && <div className="launch-error" role="alert">⚠️ {saveError}</div>}
+        {launched && launchResult && (
           <div className="launch-pending" role="status">
-            ⚠️ Smart-contract deployment is pended — createCampaign() wiring lands after contracts are deployed on-chain.
+            <strong>Campaign #{launchResult.id} launched</strong> — on-chain <span className="mono">createCampaign()</span> wiring
+            still pending (addresses stay null until deployment lands). CREATE2 salt:
+            <code className="salt">{launchResult.salt}</code>
           </div>
         )}
       </div>

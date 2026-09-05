@@ -10,6 +10,8 @@
 |---|---|
 | Smart contracts | Solidity 0.8.28, Foundry, OpenZeppelin v5.1 (EIP-1167 clones, ERC-1155) |
 | Confidential workflow | Chainlink CRE (`handlerInTee`), TypeScript, `@chainlink/cre-sdk` 1.18 |
+| Backend | bun + Hono + postgres.js + zod |
+| Local state | Postgres 16 in Docker (`docker compose`), port 5433 |
 | Settlement | Base Sepolia (`CampaignFactory` → `CampaignEscrow` clones → `CampaignReward`) |
 | Identity | Privy embedded wallets (identity anchor = wallet address) |
 
@@ -17,10 +19,15 @@
 
 ```
 contracts/            Foundry project (CampaignFactory, CampaignEscrow, CampaignReward, tests)
-wizard/ CRE workflow (workflow.ts, tests, configs, test-payloads/)
+wizard/               CRE workflow (workflow.ts, tests, configs, test-payloads/)
+backend/              Local-state API (Hono + postgres.js). Campaign CRUD + launch (fee split, salt)
+backend/db/           Schema (auto-applied to Postgres on first `docker compose up`)
+app/                  Vite + React frontend (Campaign Wizard, Campaigns list)
 docs/                 Technical spec + demo outline
+docker-compose.yml    Local Postgres 16 (port 5433) — one command for a fresh clone
 project.yaml          CRE project settings (Base Sepolia RPCs)
 secrets.yaml          CRE secret mapping
+Makefile              Common dev tasks (db-up, backend, app, test)
 ```
 
 ## Prerequisites
@@ -35,16 +42,57 @@ secrets.yaml          CRE secret mapping
 # Workflow dependencies
 git clone https://github.com/Logiqode/ETHOnline2026-Wizard.git
 bun install --cwd ./wizard
+bun install --cwd ./backend
+bun install --cwd ./app
 
 # Environment (required for CRE simulate)
 cp .env.example .env    # fill SECRET_API_TOKEN, or export it
+
+# Environment (backend local dev)
+cp backend/.env.example backend/.env   # optional — defaults match compose
+
+# Start the local Postgres (one command, no local install)
+docker compose up -d
 ```
 
 Contracts use vendored dependencies in `contracts/lib/` (via `git clone`; gitignored).
 
+## Local dev
+
+```bash
+make db-up       # start Postgres (port 5433)
+make backend     # run the API on http://localhost:4000  (bun --watch)
+make app         # run the Vite app (http://localhost:5173)
+```
+
+Or without make:
+
+```bash
+docker compose up -d
+cd backend && bun run dev
+cd app && bun run dev
+```
+
+The wizard's **Launch Campaign** now saves a campaign draft in Postgres, validates
+launch (fee split 0–10000 bps, non-zero fee accounts, ≥ 0.01 ETH operating deposit
+— mirrors `CampaignFactory.createCampaign`), and stores the generated CREATE2 salt.
+On-chain `createCampaign()` wiring is still pending deployment, so escrow/reward
+addresses stay null (honest boundary). See `backend/src/lib/launch.ts`. The
+**Campaigns** page lists everything persisted.
+
 ---
 
 ## Testing
+
+### Backend (local state API)
+
+```bash
+cd backend
+bun run typecheck
+bun test          # launch validation: fee split, fee accounts, deposit, salt
+```
+
+Requires the Postgres container (`docker compose up -d`).
 
 ### Smart contracts (Foundry)
 
@@ -92,8 +140,7 @@ bun run test                           # or: bun test
 cd ..   # repo root
 
 # Run one payload against a campaign
-cre workflow simulate ./wizard --target=staging-settings -e .env \
-  --http-payload ./wizard/test-payloads/campaign-a-pass.json
+cre workflow simulate ./wizard --target=staging-settings -e .env --http-payload ./wizard/test-payloads/campaign-a-pass.json
 ```
 
 - `--target=staging-settings` selects the config from `workflow.yaml` (`config.staging.json`).
@@ -165,6 +212,7 @@ cre workflow deploy ./wizard --target=staging-settings
 
 ## Notes
 
+- **N-participant campaign support (production).** This demo UI and local backend hardcode a **2-participant** model: Company A (POS) and Company B (reward), with a single `feeSplitBps` for Company A and Company B receiving the remainder. The underlying contracts (`CampaignFactory` / `CampaignEscrow`) and the CRE workflow are **already N-party** (see the `campaigns` map keyed by `campaignId`, the `participants` array in the frontend, and the spec's N-party design), but the demo's fee-split input, the wizard's two-brand `description.participants`, and the launch validation only exercise the 2-party case. In production this would generalize to a per-participant fee-share array and an arbitrary number of participating brands.
 - `runtime.log` calls are for simulation/testing only and **must be removed** before production (enclave logs are hidden in real execution anyway).
 - The workflow is **HTTP-triggered** and serves multiple campaigns from one binary: the config holds a `campaigns` map keyed by `campaignId`, and each request body selects the campaign. Production per-campaign isolation (one workflow per campaign for billing/blast-radius) is a *deployment* choice, not a code limitation — the same binary can be deployed once per campaign, each with its own config, or once for all.
 - All on-chain writes via the CRE workflow (`EVMClient.writeReport`) are currently **commented** until the receiver contract (`IReceiver`-compatible `CampaignEscrow`) is deployed on Base Sepolia.

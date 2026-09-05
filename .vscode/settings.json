@@ -1,0 +1,13 @@
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "driver": "PostgreSQL",
+            "name": "ETHOnline-Wizard",
+            "connectString": "postgresql://wizard:wizard@localhost:5433/wizard",
+            "connectionTimeout": 30
+        }
+    ]
+}
