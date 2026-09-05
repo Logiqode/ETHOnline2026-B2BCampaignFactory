@@ -1,4 +1,4 @@
-# B2BCampaignFactory — Technical Specification & Agent Context
+# Wizard — Technical Specification & Agent Context
 
 > **Status:** Consolidated build spec for ETHOnline 2026 (From Scratch submission).
 > **Deadline:** Sunday, Sep 13, 2026 12:00 PM EDT. All code, demo video, and submission done by then - target Fri Sep 11 as buffer.
@@ -21,7 +21,7 @@ To keep the hackathon build shippable in ~12 days, every requirement below is ta
 
 ## 1. Project Vision & Core Positioning
 
-- **Project Name:** B2BCampaignFactory
+- **Project Name:** Wizard
 - **Core Framing:** An open-source, zero-trust-oriented enterprise MarTech & Attestation Protocol.
 - **Primary Technology:**
   - **Chainlink CRE Confidential Workflows** (`handlerInTee`) — confidential off-chain POS verification.
@@ -33,7 +33,7 @@ To keep the hackathon build shippable in ~12 days, every requirement below is ta
 
 Cross-brand co-marketing normally requires custom API integrations, database sharing, sensitive customer-data exchange, and/or manual reconciliation. It also suffers from **identity fragmentation**: a single customer may exist under different emails/phones at different brands (e.g. a Yahoo address at Brand A, a Google address at Brand B), so those brands can never link that customer without sharing raw PII.
 
-B2BCampaignFactory provides a reusable protocol where:
+Wizard provides a reusable protocol where:
 
 1. Brand A supplies transaction data **confidentially**.
 2. CRE evaluates campaign eligibility inside a confidential execution environment (TEE).
@@ -43,7 +43,7 @@ B2BCampaignFactory provides a reusable protocol where:
 
 ### Judge-Facing Thesis (one sentence)
 
-> **B2BCampaignFactory lets enterprises verify cross-brand campaign eligibility confidentially while keeping a shared, persistent settlement record — without requiring bilateral customer-data sharing or bespoke integrations.**
+> **Wizard lets enterprises verify cross-brand campaign eligibility confidentially while keeping a shared, persistent settlement record — without requiring bilateral customer-data sharing or bespoke integrations.**
 
 ---
 
@@ -373,7 +373,7 @@ Round-1 criteria: video presentation & quality, project live-demo quality, **pro
 ## 10. Repository / Documentation Strategy
 
 ```text
-B2BCampaignFactory/
+Wizard/
 ├── contracts/
 │   ├── CampaignFactory.sol
 │   ├── CampaignEscrow.sol

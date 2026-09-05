@@ -6,7 +6,7 @@ import {CampaignEscrow} from "./CampaignEscrow.sol";
 import {CampaignReward} from "./CampaignReward.sol";
 
 /// @title CampaignFactory
-/// @notice Master factory for B2BCampaignFactory — deploys configured campaign clones.
+/// @notice Master factory for Wizard — deploys configured campaign clones.
 /// @dev Each campaign = one EIP-1167 clone of the CampaignEscrow implementation + one
 ///      CampaignReward (ERC-1155) deployed in the same transaction (isolated mint authority).
 ///      The escrow is deployed via CREATE2 with a caller-supplied salt so its address is

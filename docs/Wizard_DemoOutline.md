@@ -1,7 +1,7 @@
-# B2BCampaignFactory - ETHOnline 2026 Demo and Presentation Outline
+# Wizard - ETHOnline 2026 Demo and Presentation Outline
 
 > **Status:** Consolidated demo outline for ETHOnline 2026 (From Scratch submission).
-> **Companion doc:** B2BCampaignFactory_Technical_Spec.md (single source of truth for architecture and sponsor-track requirements). This outline is the presentation companion to that spec.
+> **Companion doc:** Wizard_TechnicalSpec.md (single source of truth for architecture and sponsor-track requirements). This outline is the presentation companion to that spec.
 > **Primary sponsor tracks:** Chainlink CRE / Confidential Workflows - Privy (Best B2B Financial Product) - Privy (Best Financial Flow).
 > **Scope of the 4-minute video:** cashback (Bpoints) model only - time is limited. The badge model is telegraphed in one beat and fully covered in the Deep-Dive Appendix.
 
@@ -46,7 +46,7 @@ Use fictional brands in all copy. No real logos, no "partner" language, no real 
 Show Brand A and Brand B as separate data silos. Show the identity-fragmentation problem (same person, a Yahoo email at one brand, a Google email at another). Transition into the factory console with the SDK layer sitting above Chainlink CRE and Privy.
 
 ### Script
-> "Cross-brand co-marketing forces enterprises into risky database sharing or expensive custom API builds. And even when a brand wants to reward its customers, they cannot link the same person across companies - a Yahoo address at one brand, a Google address at another. B2BCampaignFactory is an open-source enterprise protocol built natively on Chainlink CRE and Privy. It replaces centralized data exchange with confidential TEE workflows, unified identity, and immutable on-chain state on Base Sepolia."
+> "Cross-brand co-marketing forces enterprises into risky database sharing or expensive custom API builds. And even when a brand wants to reward its customers, they cannot link the same person across companies - a Yahoo address at one brand, a Google address at another. Wizard is an open-source enterprise protocol built natively on Chainlink CRE and Privy. It replaces centralized data exchange with confidential TEE workflows, unified identity, and immutable on-chain state on Base Sepolia."
 
 ### Message to Land
 The problem is **enterprise coordination, data sharing, and identity fragmentation** - not simply coupons or loyalty points.
@@ -139,7 +139,7 @@ Switch to the **Brand B (Globex Books) page**. Show the customer's Bpoints balan
 
 ### Closing Slide
 ```text
-B2BCampaignFactory
+Wizard
 
 Private verification.   (Chainlink CRE)
 Unified identity.       (Privy)
@@ -276,7 +276,7 @@ After the demo, future work can be summarized as:
 
 If a judge remembers only one sentence:
 
-> **B2BCampaignFactory lets enterprises verify cross-brand campaign eligibility confidentially while keeping a shared, persistent settlement record - without requiring bilateral customer-data sharing.**
+> **Wizard lets enterprises verify cross-brand campaign eligibility confidentially while keeping a shared, persistent settlement record - without requiring bilateral customer-data sharing.**
 
 The technical story:
 
@@ -338,7 +338,7 @@ Chainlink CRE + Privy as core dependencies
 - Round-1 async judging screens; partner prizes are judged independently - you can still win them even without advancing to live.
 
 ## Judging criteria mapping
-| Criterion | How B2BCampaignFactory scores |
+| Criterion | How Wizard scores |
 |---|---|
 | Technicality | CRE confidential workflow with stateful cumulative cap, identity-linked nullifiers, ERC-1155 universal rewards |
 | Originality | Confidential cross-brand campaign factory + unified identity as a service; one-click gas-sponsored clone deploy |

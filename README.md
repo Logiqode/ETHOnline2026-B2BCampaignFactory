@@ -1,4 +1,4 @@
-# B2BCampaignFactory
+# Wizard
 
 **Confidential cross-brand campaign factory** — B2B loyalty/cross-brand campaigns where two enterprises run "spend at Brand A → earn rewards redeemable at Brand B" without sharing raw customer data or building bilateral integrations.
 
@@ -17,7 +17,7 @@
 
 ```
 contracts/            Foundry project (CampaignFactory, CampaignEscrow, CampaignReward, tests)
-b2b-campaign-factory/ CRE workflow (workflow.ts, tests, configs, test-payloads/)
+wizard/ CRE workflow (workflow.ts, tests, configs, test-payloads/)
 docs/                 Technical spec + demo outline
 project.yaml          CRE project settings (Base Sepolia RPCs)
 secrets.yaml          CRE secret mapping
@@ -33,8 +33,8 @@ secrets.yaml          CRE secret mapping
 
 ```bash
 # Workflow dependencies
-git clone https://github.com/Logiqode/ETHOnline2026-B2BCampaignFactory.git
-bun install --cwd ./b2b-campaign-factory
+git clone https://github.com/Logiqode/ETHOnline2026-Wizard.git
+bun install --cwd ./wizard
 
 # Environment (required for CRE simulate)
 cp .env.example .env    # fill SECRET_API_TOKEN, or export it
@@ -76,7 +76,7 @@ cd contracts
 The workflow is **HTTP-triggered** and serves multiple campaigns from one binary. The config holds a `campaigns` map keyed by `campaignId`; each HTTP request body selects a campaign via `campaignId` and carries the POS purchase.
 
 ```bash
-cd b2b-campaign-factory
+cd wizard
 
 # Typecheck
 bun run typecheck                      # or: ./node_modules/.bin/tsc --noEmit
@@ -92,13 +92,13 @@ bun run test                           # or: bun test
 cd ..   # repo root
 
 # Run one payload against a campaign
-cre workflow simulate ./b2b-campaign-factory --target=staging-settings -e .env \
-  --http-payload ./b2b-campaign-factory/test-payloads/campaign-a-pass.json
+cre workflow simulate ./wizard --target=staging-settings -e .env \
+  --http-payload ./wizard/test-payloads/campaign-a-pass.json
 ```
 
 - `--target=staging-settings` selects the config from `workflow.yaml` (`config.staging.json`).
 - `-e .env` loads the environment (including `SECRET_API_TOKEN`, read by the enclave at runtime — no shell export needed).
-- `--http-payload <path>` is the HTTP request body. Payload files live in `b2b-campaign-factory/test-payloads/`.
+- `--http-payload <path>` is the HTTP request body. Payload files live in `wizard/test-payloads/`.
 
 The three demo campaigns (in `config.staging.json` / `config.production.json`):
 
@@ -111,9 +111,9 @@ The three demo campaigns (in `config.staging.json` / `config.production.json`):
 Run all the bundled payloads (pass + fail per campaign) and check the verdict:
 
 ```bash
-for p in b2b-campaign-factory/test-payloads/campaign-*.json; do
+for p in wizard/test-payloads/campaign-*.json; do
   echo "===== $(basename $p) ====="
-  cre workflow simulate ./b2b-campaign-factory --target=staging-settings -e .env \
+  cre workflow simulate ./wizard --target=staging-settings -e .env \
     --http-payload "$p" 2>&1 | grep -E "Workflow Simulation Result|APPROVE|REJECT"
 done
 ```
@@ -141,10 +141,10 @@ Simulation output shows the handler's `runtime.log` lines (debug only — remove
 
 ### Mock payloads
 
-Per-campaign POS payloads live in `b2b-campaign-factory/test-payloads/` (one file per campaign × scenario). The campaign terms live in the `campaigns` map inside the config files:
+Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). The campaign terms live in the `campaigns` map inside the config files:
 
-- `b2b-campaign-factory/config.staging.json` → `--target=staging-settings`
-- `b2b-campaign-factory/config.production.json` → `--target=production-settings`
+- `wizard/config.staging.json` → `--target=staging-settings`
+- `wizard/config.production.json` → `--target=production-settings`
 
 Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, disallowed day, cap exhaustion).
 
@@ -157,10 +157,10 @@ Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpen
 cre workflow supported-chains
 
 # CRE: compile a workflow to WASM
-cre workflow build ./b2b-campaign-factory
+cre workflow build ./wizard
 
 # CRE: deploy a workflow to the Workflow Registry (real, requires staging/prod target)
-cre workflow deploy ./b2b-campaign-factory --target=staging-settings
+cre workflow deploy ./wizard --target=staging-settings
 ```
 
 ## Notes

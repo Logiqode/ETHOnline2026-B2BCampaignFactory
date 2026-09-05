@@ -10,8 +10,8 @@ export default function Navbar() {
   return (
     <nav className="topbar">
       <div className="brand">
-        <div className="brand-mark">B</div>
-        B2BCampaignFactory
+        <div className="brand-mark">W</div>
+        Wizard
       </div>
       <div className="nav-links">
         {PAGES.map((p) => (

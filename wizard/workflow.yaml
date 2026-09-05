@@ -3,7 +3,7 @@
 # ==========================================================================
 staging-settings:
   user-workflow:
-    workflow-name: "b2b-campaign-factory-staging"
+    workflow-name: "wizard-staging"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
@@ -12,7 +12,7 @@ staging-settings:
 # ==========================================================================
 production-settings:
   user-workflow:
-    workflow-name: "b2b-campaign-factory-production"
+    workflow-name: "wizard-production"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.production.json"

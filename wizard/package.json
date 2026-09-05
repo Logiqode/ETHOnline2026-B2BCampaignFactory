@@ -1,5 +1,5 @@
 {
-  "name": "b2b-campaign-factory-workflow",
+  "name": "wizard-workflow",
   "version": "1.0.0",
   "main": "dist/main.js",
   "private": true,
