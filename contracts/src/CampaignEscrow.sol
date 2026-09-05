@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {CampaignReward} from "./CampaignReward.sol";
+import {CampaignRulesLib} from "./CampaignRulesLib.sol";
 
 /// @title CampaignEscrow
 /// @notice Per-campaign state & authorization contract for a B2B cross-brand campaign.
@@ -41,7 +42,6 @@ contract CampaignEscrow {
     error CampaignEscrow__CampaignNotLive(uint256 timestamp, uint256 start, uint256 end);
     error CampaignEscrow__CampaignEnded(uint256 timestamp, uint256 end);
     error CampaignEscrow__NullifierAlreadyUsed(bytes32 nullifier);
-    error CampaignEscrow__CapExceeded(uint256 alreadyEarned, uint256 points, uint256 cap);
     error CampaignEscrow__ZeroPoints();
     error CampaignEscrow__InsufficientBalance(uint256 balance, uint256 amount);
     error CampaignEscrow__OnlyOwner(address caller, address owner);
@@ -61,13 +61,12 @@ contract CampaignEscrow {
     //////////////////////////////////////////////////////////////*/
 
     struct CampaignTerms {
-        uint256 minSpend;   // e.g. 1000 = $10.00 (18-decimals-friendly integer)
-        uint256 rateBps;    // cashback rate in basis points, e.g. 1000 = 10%
-        uint256 cap;        // per-user lifetime cap in reward units
-        uint64 start;       // campaign start (unix)
-        uint64 end;         // campaign end (unix)
-        address reward;     // paired CampaignReward (ERC-1155)
+        uint256 rateBps;                  // cashback rate in basis points, e.g. 1000 = 10%
+        uint64 start;                     // campaign start (unix)
+        uint64 end;                       // campaign end (unix)
+        address reward;                   // paired CampaignReward (ERC-1155)
         uint256 rewardTokenId;
+        CampaignRulesLib.Rules rules;     // toggleable eligibility gates (see CampaignRulesLib)
     }
 
     struct CampaignProof {
@@ -107,7 +106,9 @@ contract CampaignEscrow {
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
         if (terms_.rateBps == 0) revert CampaignEscrow__ZeroPoints();
-        _requireAtMost2Decimals(terms_.cap); // per-user cap should be cent-granular too
+        // Only validate the per-user cap's granularity when the cap rule is actually on.
+        // (When cap is disabled, `cap=0` is the natural "no cap" value and is valid.)
+        if (terms_.rules.capEnabled) _requireAtMost2Decimals(terms_.rules.cap);
         owner = msg.sender; // the factory (which cloned + initialized us)
         terms = terms_;
         workflowOwner = workflowOwner_;
@@ -141,13 +142,19 @@ contract CampaignEscrow {
         _requireLive();
         _requireAtMost2Decimals(amountSpent); // $3.125-style inputs rejected
 
+        // Rule gates — each only fires if its flag is set. Window check above runs first,
+        // so day-of-week can never override the campaign's [start, end] boundaries.
+        CampaignRulesLib.requireAllowedDay(terms.rules, block.timestamp);
+
         if (usedNullifiers[nullifier]) revert CampaignEscrow__NullifierAlreadyUsed(nullifier);
 
         CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
         if (proof.originalBlock == 0) proof.originalBlock = block.number;
 
         uint256 alreadyEarned = proof.totalBalance;
-        points = _computePoints(amountSpent, alreadyEarned);
+        // min-spend gate (reverts if under), then points (capped only if capEnabled).
+        CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
+        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
 
         // Unspent balance grows with each earn; totalBalance is the lifetime lineage.
         proof.unspentBalance += points;
@@ -158,14 +165,10 @@ contract CampaignEscrow {
         CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
     }
 
-    /// @dev points = min(rate * amountSpent / 1e4, cap - alreadyEarned), floored at 0;
-    ///      reverts if nothing left to earn (cap fully exhausted).
-    function _computePoints(uint256 amountSpent, uint256 alreadyEarned) internal view returns (uint256) {
-        uint256 raw = (terms.rateBps * amountSpent) / 10_000;
-        uint256 remaining = terms.cap - alreadyEarned;
-        uint256 points = raw > remaining ? remaining : raw;
-        if (points == 0) revert CampaignEscrow__CapExceeded(alreadyEarned, raw, terms.cap);
-        return points;
+    /// @dev Points are computed by CampaignRulesLib (capped only if the cap rule is on).
+    ///      Keep this view for off-chain reads of a raw claim.
+    function computePointsPreview(uint256 amountSpent, uint256 alreadyEarned) external view returns (uint256) {
+        return CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
     }
 
     /*//////////////////////////////////////////////////////////////

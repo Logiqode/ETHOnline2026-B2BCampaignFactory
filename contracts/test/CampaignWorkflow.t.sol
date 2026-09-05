@@ -5,6 +5,7 @@ import {Test, console2} from "forge-std/Test.sol";
 import {CampaignFactory} from "../src/CampaignFactory.sol";
 import {CampaignEscrow} from "../src/CampaignEscrow.sol";
 import {CampaignReward} from "../src/CampaignReward.sol";
+import {CampaignRulesLib} from "../src/CampaignRulesLib.sol";
 
 /// @title CampaignWorkflow — integration tests for factory → escrow → reward
 contract CampaignWorkflowTest is Test {
@@ -23,9 +24,27 @@ contract CampaignWorkflowTest is Test {
     uint256 public rewardTokenId;
 
     // Demo numbers: $12 spend → 1.20 Bpoints at 10% cashback, cap $20/user
-    uint256 public constant MIN_SPEND = 10e18; // $10
     uint256 public constant RATE_BPS = 1000;   // 10%
+    uint256 public constant MIN_SPEND = 10e18; // $10
     uint256 public constant CAP = 20e18;       // $20
+
+    function _terms(uint64 start, uint64 end) internal pure returns (CampaignEscrow.CampaignTerms memory) {
+        return CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0), // set by factory
+            rewardTokenId: 0,   // set by factory
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: true,
+                minSpend: MIN_SPEND,
+                capEnabled: true,
+                cap: CAP,
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0
+            })
+        });
+    }
 
     function setUp() public {
         vm.warp(1_700_000_000); // realistic wall-clock (2023-11-14), avoids uint64 underflow
@@ -36,16 +55,7 @@ contract CampaignWorkflowTest is Test {
         // Create a campaign: terms + workflowOwner + reward URI
         uint64 start = uint64(block.timestamp - 1 days);
         uint64 end = uint64(block.timestamp + 30 days);
-        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
-            minSpend: MIN_SPEND,
-            rateBps: RATE_BPS,
-            cap: CAP,
-            start: start,
-            end: end,
-            reward: address(0), // set by factory
-            rewardTokenId: 0    // set by factory
-        });
-        campaignId = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        campaignId = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
         (escrowAddr, rewardAddr, rewardTokenId, , ) = factory.campaigns(campaignId);
     }
 
@@ -57,11 +67,13 @@ contract CampaignWorkflowTest is Test {
         assertTrue(escrowAddr != address(0), "escrow deployed");
         assertTrue(rewardAddr != address(0), "reward deployed");
         assertEq(CampaignEscrow(escrowAddr).workflowOwner(), workflowOwner, "workflowOwner wired");
-        (uint256 minSpend_, uint256 rateBps_, uint256 cap_, , , address reward_, uint256 tokenId_) =
+        (uint256 rateBps_, , , address reward_, uint256 tokenId_, CampaignRulesLib.Rules memory rules_) =
             CampaignEscrow(escrowAddr).terms();
         assertEq(rateBps_, RATE_BPS, "terms rate wired");
-        assertEq(minSpend_, MIN_SPEND, "terms minSpend wired");
-        assertEq(cap_, CAP, "terms cap wired");
+        assertEq(rules_.minSpend, MIN_SPEND, "terms minSpend wired");
+        assertTrue(rules_.minSpendEnabled, "minSpend rule enabled");
+        assertEq(rules_.cap, CAP, "terms cap wired");
+        assertTrue(rules_.capEnabled, "cap rule enabled");
         assertEq(reward_, rewardAddr, "terms reward wired");
         assertEq(tokenId_, rewardTokenId, "terms tokenId wired");
         assertEq(rewardTokenId, factory.REWARD_TOKEN_RANGE(), "first campaign tokenId = 1 * RANGE");
@@ -70,16 +82,7 @@ contract CampaignWorkflowTest is Test {
     function test_FactoryMultipleCampaignsIsolateState() public {
         uint64 start = uint64(block.timestamp - 1 hours);
         uint64 end = uint64(block.timestamp + 30 days);
-        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
-            minSpend: MIN_SPEND,
-            rateBps: RATE_BPS,
-            cap: CAP,
-            start: start,
-            end: end,
-            reward: address(0),
-            rewardTokenId: 0
-        });
-        uint256 id2 = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id2 = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
         (address escrow2, address reward2, uint256 tokenId2, , ) = factory.campaigns(id2);
 
         assertTrue(escrowAddr != escrow2, "distinct escrow clones");
@@ -149,16 +152,7 @@ contract CampaignWorkflowTest is Test {
     function test_ClaimBeforeWindowReverts() public {
         uint64 start = uint64(block.timestamp + 1 days);
         uint64 end = uint64(block.timestamp + 30 days);
-        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
-            minSpend: MIN_SPEND,
-            rateBps: RATE_BPS,
-            cap: CAP,
-            start: start,
-            end: end,
-            reward: address(0),
-            rewardTokenId: 0
-        });
-        uint256 id = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
         (address esc, , , , ) = factory.campaigns(id);
         vm.prank(workflowOwner);
         vm.expectRevert(); // CampaignNotLive
@@ -168,16 +162,7 @@ contract CampaignWorkflowTest is Test {
     function test_ClaimAfterWindowReverts() public {
         uint64 start = uint64(block.timestamp - 30 days);
         uint64 end = uint64(block.timestamp - 1 days);
-        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
-            minSpend: MIN_SPEND,
-            rateBps: RATE_BPS,
-            cap: CAP,
-            start: start,
-            end: end,
-            reward: address(0),
-            rewardTokenId: 0
-        });
-        uint256 id = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        uint256 id = factory.createCampaign(_terms(start, end), workflowOwner, "https://example.com/metadata/{id}.json");
         (address esc, , , , ) = factory.campaigns(id);
         vm.prank(workflowOwner);
         vm.expectRevert(); // CampaignEnded
@@ -266,8 +251,8 @@ contract CampaignWorkflowTest is Test {
 
     function test_ClaimAllowsExactlyTwoDecimals() public {
         vm.prank(workflowOwner);
-        uint256 points = CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 3.25e18); // $3.25
-        assertEq(points, 0.325e18, "10% of $3.25 = 0.325 Bpoints");
+        uint256 points = CampaignEscrow(escrowAddr).claim(keccak256("n1"), customer, 12.25e18); // $12.25 (above min-spend, 2 decimals)
+        assertEq(points, 1.225e18, "10% of $12.25 = 1.225 Bpoints");
     }
 
     function test_RedeemForRejectsTooManyDecimals() public {
@@ -287,5 +272,221 @@ contract CampaignWorkflowTest is Test {
         vm.prank(brandB);
         CampaignEscrow(escrowAddr).redeemFor(customer, 1.2e18); // 2 decimals — ok
         assertEq(CampaignEscrow(escrowAddr).availableBalance(customer), 0, "all spent");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+               RULE SHAPES — deploy per-rule / mixed campaigns
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Deploy a fresh campaign with the given rule flags and return its escrow.
+    function _deployWithRules(
+        bool minSpendOn,
+        uint256 minSpend,
+        bool capOn,
+        uint256 cap,
+        bool dayOn,
+        uint8 daysOfWeek,
+        uint64 start,
+        uint64 end
+    ) internal returns (address esc) {
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: minSpendOn,
+                minSpend: minSpend,
+                capEnabled: capOn,
+                cap: cap,
+                dayOfWeekEnabled: dayOn,
+                daysOfWeek: daysOfWeek
+            })
+        });
+        uint256 id = factory.createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json");
+        (esc, , , , ) = factory.campaigns(id);
+    }
+
+    /// @notice 1. MIN-SPEND ONLY — below-min reverts; at/above min mints.
+    function test_RuleShapeMinSpendOnly() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        address esc = _deployWithRules(true, MIN_SPEND, false, 0, false, 0, start, end);
+
+        // Below min-spend → reverts
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.BelowMinSpend
+        CampaignEscrow(esc).claim(keccak256("below"), customer, 9e18);
+
+        // At/above min-spend → mints; uncapped (cap rule off) so 10% of $20 = 2.00
+        vm.prank(workflowOwner);
+        uint256 points = CampaignEscrow(esc).claim(keccak256("ok"), customer, 20e18);
+        assertEq(points, 2e18, "10% of $20 = 2.00, uncapped");
+    }
+
+    /// @notice 2. REWARD-CAP ONLY — uncapped until cap, then reverts.
+    function test_RuleShapeCapOnly() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        address esc = _deployWithRules(false, 0, true, CAP, false, 0, start, end);
+
+        // No min-spend: a $3 claim mints 0.30 (uncapped)
+        vm.prank(workflowOwner);
+        uint256 p1 = CampaignEscrow(esc).claim(keccak256("a"), customer, 3e18);
+        assertEq(p1, 0.3e18, "no min-spend, uncapped below cap");
+
+        // $200 claim → 20.00, exactly the cap
+        vm.prank(workflowOwner);
+        uint256 p2 = CampaignEscrow(esc).claim(keccak256("b"), customer, 200e18);
+        assertEq(p2, 20e18 - 0.3e18, "clamps to remaining cap");
+
+        // Next claim → cap exhausted → reverts
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.CapExceeded
+        CampaignEscrow(esc).claim(keccak256("c"), customer, 12e18);
+    }
+
+    /// @notice 3. DAY-OF-WEEK ONLY — disallowed day reverts; allowed day mints; and the
+    ///         window boundary is never bypassed (NotAllowedDay only fires in-window).
+    function test_RuleShapeDayOfWeekOnly() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        // Allow Monday only. In CampaignRulesLib, dayIndex: 0=Mon..6=Sun, so bit 0 = Monday.
+        address esc = _deployWithRules(false, 0, false, 0, true, 1, start, end);
+
+        // Find a Monday (dayIndex 0) within the campaign window [start, end].
+        // dayIndex = (ts/86400 + 3) % 7. We want dayIndex == 0, so ts/86400 % 7 == 4.
+        uint256 mondayTs;
+        for (uint256 ts = start; ts <= end; ts += 1 days) {
+            if (((ts / 86400) + 3) % 7 == 0) { mondayTs = ts; break; }
+        }
+        assertTrue(mondayTs != 0, "found a Monday in-window");
+        vm.warp(mondayTs);
+
+        // Monday allowed → mints (no min-spend, no cap)
+        vm.prank(workflowOwner);
+        uint256 p = CampaignEscrow(esc).claim(keccak256("monday"), customer, 12e18);
+        assertEq(p, 1.2e18, "Monday allowed -> mints");
+
+        // Disallowed day (Tuesday, dayIndex 1) → reverts NotAllowedDay
+        vm.warp(mondayTs + 1 days);
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.NotAllowedDay
+        CampaignEscrow(esc).claim(keccak256("tuesday"), customer, 12e18);
+    }
+
+    /// @notice 3b. Day-of-week cannot bypass the campaign window: before start or after end
+    ///         always reverts the window error even if the day is allowed.
+    function test_RuleShapeDayOfWeekCannotBypassWindow() public {
+        // Campaign window is entirely in the future relative to now, on an allowed day.
+        uint64 start = uint64(block.timestamp + 5 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        address esc = _deployWithRules(false, 0, false, 0, true, 1, start, end);
+
+        // Before start, even on an allowed weekday → reverts CampaignNotLive (not day-of-week)
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignEscrow.CampaignEscrow__CampaignNotLive.selector, block.timestamp, start, end));
+        CampaignEscrow(esc).claim(keccak256("pre"), customer, 12e18);
+
+        // After end → reverts CampaignEnded
+        uint64 pastStart = uint64(block.timestamp - 30 days);
+        uint64 pastEnd = uint64(block.timestamp - 5 days);
+        address esc2 = _deployWithRules(false, 0, false, 0, true, 1, pastStart, pastEnd);
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignEscrow.CampaignEscrow__CampaignEnded.selector, block.timestamp, pastEnd));
+        CampaignEscrow(esc2).claim(keccak256("post"), customer, 12e18);
+    }
+
+    /// @notice 4. ALL / MIXED — all three gates apply together.
+    function test_RuleShapeAllRules() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        address esc = _deployWithRules(true, MIN_SPEND, true, CAP, true, 1, start, end);
+
+        // Warp to a Monday (dayIndex 0) in-window so the day-of-week gate passes.
+        uint256 mondayTs;
+        for (uint256 ts = start; ts <= end; ts += 1 days) {
+            if (((ts / 86400) + 3) % 7 == 0) { mondayTs = ts; break; }
+        }
+        vm.warp(mondayTs);
+
+        // Below min-spend reverts (even on an allowed day)
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.BelowMinSpend
+        CampaignEscrow(esc).claim(keccak256("low"), customer, 5e18);
+
+        // Allowed day + above min-spend → mints capped
+        vm.prank(workflowOwner);
+        uint256 p = CampaignEscrow(esc).claim(keccak256("ok"), customer, 20e18);
+        assertEq(p, 2e18, "10% of $20 = 2.00");
+
+        // Disallowed day reverts even above min-spend
+        vm.warp(mondayTs + 1 days); // Tuesday (dayIndex 1)
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.NotAllowedDay
+        CampaignEscrow(esc).claim(keccak256("wrongday"), customer, 20e18);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+              PARALLEL CAMPAIGNS — three rule mixes, all live at once
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice Deploy three campaigns in the same window (all live in parallel), each
+    ///         with a different rule mix, and assert each enforces ONLY its own mix.
+    ///         This proves the rules are per-campaign and don't cross-contaminate.
+    function test_ParallelCampaignsDifferentRuleMixes() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+
+        // Three parallel campaigns, distinct rule mixes, distinct escrows:
+        address escA = _deployWithRules(true, MIN_SPEND, false, 0, false, 0, start, end); // min-spend only
+        address escB = _deployWithRules(false, 0, true, CAP, false, 0, start, end);       // cap only
+        address escC = _deployWithRules(false, 0, false, 0, true, 1, start, end);         // day-of-week only (Mon)
+
+        // All three are live in the same window (parallel). Warp to a Monday in-window so
+        // campaign C's day gate passes, and campaigns A/B ignore days entirely.
+        uint256 mondayTs;
+        for (uint256 ts = start; ts <= end; ts += 1 days) {
+            if (((ts / 86400) + 3) % 7 == 0) { mondayTs = ts; break; }
+        }
+        vm.warp(mondayTs);
+
+        // ── Campaign A (min-spend only) ──
+        // Below min-spend → reverts even though cap/day are off
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.BelowMinSpend
+        CampaignEscrow(escA).claim(keccak256("a-low"), customer, 9e18);
+        // At/above min-spend → mints, UNCAPPED (cap rule off)
+        vm.prank(workflowOwner);
+        uint256 a = CampaignEscrow(escA).claim(keccak256("a-ok"), customer, 20e18);
+        assertEq(a, 2e18, "A: 10% of $20 = 2.00, uncapped (cap off)");
+
+        // ── Campaign B (cap only) ──
+        // No min-spend: a $3 claim mints even though it's below A's min-spend
+        vm.prank(workflowOwner);
+        uint256 b1 = CampaignEscrow(escB).claim(keccak256("b-small"), customer, 3e18);
+        assertEq(b1, 0.3e18, "B: no min-spend, $3 -> 0.30");
+        // Cap enforced: a $200 claim clamps to the remaining cap
+        vm.prank(workflowOwner);
+        uint256 b2 = CampaignEscrow(escB).claim(keccak256("b-cap"), customer, 200e18);
+        assertEq(b2, 20e18 - 0.3e18, "B: clamps to remaining cap");
+
+        // ── Campaign C (day-of-week only) ──
+        // Monday (allowed) → mints, no min-spend/cap
+        vm.prank(workflowOwner);
+        uint256 c1 = CampaignEscrow(escC).claim(keccak256("c-mon"), customer, 12e18);
+        assertEq(c1, 1.2e18, "C: Monday allowed, 10% of $12 = 1.20");
+        // Disallowed day (Tuesday) → reverts
+        vm.warp(mondayTs + 1 days);
+        vm.prank(workflowOwner);
+        vm.expectRevert(); // CampaignRulesLib.NotAllowedDay
+        CampaignEscrow(escC).claim(keccak256("c-tue"), customer, 12e18);
+
+        // ── Cross-campaign isolation: the SAME customer wallet is tracked independently.
+        // In A they earned 2.00 (uncapped); in B they earned 0.30 + capped; in C 1.20.
+        assertEq(CampaignEscrow(escA).lifetimeEarned(customer), 2e18, "A independent");
+        assertEq(CampaignEscrow(escB).lifetimeEarned(customer), 20e18, "B independent (capped)");
+        assertEq(CampaignEscrow(escC).lifetimeEarned(customer), 1.2e18, "C independent");
     }
 }

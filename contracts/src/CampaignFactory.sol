@@ -62,7 +62,7 @@ contract CampaignFactory {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Deploy a new campaign: escrow clone + paired reward contract.
-    /// @param terms_ Campaign terms (minSpend, rateBps, cap, start, end).
+    /// @param terms_ Campaign terms (rateBps + rules, start, end).
     /// @param workflowOwner_ CRE workflow-owner EOA that will submit claims.
     /// @param rewardUri_ ERC-1155 metadata URI template (e.g. ".../{id}.json").
     /// @return campaignId Incrementing id. The escrow's rewardTokenId = campaignId * REWARD_TOKEN_RANGE

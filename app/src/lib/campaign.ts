@@ -123,7 +123,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     name: 'Day of week',
     description: 'Reward only on selected days.',
     guide: 'Pick one or more days (or none for any day).',
-    state: 'disabled',
+    state: 'enabled',
     fields: [
       { key: 'day', label: 'Days', type: 'multi', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] },
     ],
@@ -133,7 +133,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     name: 'Member tier',
     description: 'e.g. Tier 2 / Gold and above.',
     guide: 'Only members above a tier earn rewards.',
-    state: 'disabled',
+    state: 'production-limited',
     fields: [{ key: 'tier', label: 'Tier', type: 'select', options: ['Tier 1', 'Tier 2', 'Tier 3', 'Gold', 'Platinum'] }],
   },
   {
