@@ -1,18 +1,40 @@
 {
-	"schedule": "0 */1 * * * *",
-	"campaignId": 1,
-	"minSpend": 10,
-	"rateBps": 1000,
-	"cap": 20,
-	"start": 1757366400,
-	"end": 1775049600,
-	"workflowOwner": "0x0000000000000000000000000000000000000001",
-	"mockContractAddress": "0x0000000000000000000000000000000000000002",
-	"testPayload": {
-		"userAnchor": "0x1234567890123456789012345678901234567890",
-		"merchantId": "burgera",
-		"amountSpent": 12.0,
-		"timestamp": 1757366400,
-		"items": ["burger", "fries"]
+	"campaigns": {
+		"1": {
+			"campaignId": 1,
+			"rewardType": "discount",
+			"minSpend": 20,
+			"discountType": "fixed",
+			"discountValue": 5,
+			"start": 1757366400,
+			"end": 1775049600,
+			"escrow": "0x0000000000000000000000000000000000000001"
+		},
+		"2": {
+			"campaignId": 2,
+			"rewardType": "cashback",
+			"minSpend": 0,
+			"rateBps": 2000,
+			"cap": 50,
+			"capPeriod": "Week",
+			"capPeriodCount": 1,
+			"capResetBasis": "Calendar",
+			"capResetWeekday": 1,
+			"capResetTime": "04:00",
+			"daysOfWeek": 10,
+			"start": 1757366400,
+			"end": 1775049600,
+			"escrow": "0x0000000000000000000000000000000000000002"
+		},
+		"3": {
+			"campaignId": 3,
+			"rewardType": "digital",
+			"minSpend": 15,
+			"digitalName": "White Bear Plushie Medium",
+			"totalRedeemCap": 200,
+			"start": 1757366400,
+			"end": 1775049600,
+			"escrow": "0x0000000000000000000000000000000000000003"
+		}
 	}
 }
