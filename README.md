@@ -17,7 +17,7 @@
 
 ```
 contracts/            Foundry project (CampaignFactory, CampaignEscrow, CampaignReward, tests)
-b2b-campaign-factory/ CRE workflow (workflow.ts, tests, configs)
+b2b-campaign-factory/ CRE workflow (workflow.ts, tests, configs, test-payloads/)
 docs/                 Technical spec + demo outline
 project.yaml          CRE project settings (Base Sepolia RPCs)
 secrets.yaml          CRE secret mapping
@@ -54,8 +54,9 @@ cd contracts
 # Build
 ~/.foundry/bin/forge build          # or: forge build (if on PATH)
 
-# Run the test suite (20 tests: claim, cap, nullifier, window,
-# redeem/redeemFor, reedeemer whitelist, decimal guard, factory wiring)
+# Run the test suite (26 tests: claim, cap, nullifier, window,
+# redeem/redeemFor, redeemer whitelist, decimal guard, factory wiring,
+# per-rule deployment shapes, and parallel campaigns with different rule mixes)
 ~/.foundry/bin/forge test           # or: forge test
 
 # Run a single test (verbose trace)
@@ -72,41 +73,80 @@ cd contracts
 
 ### CRE confidential workflow (TypeScript / bun)
 
+The workflow is **HTTP-triggered** and serves multiple campaigns from one binary. The config holds a `campaigns` map keyed by `campaignId`; each HTTP request body selects a campaign via `campaignId` and carries the POS purchase.
+
 ```bash
 cd b2b-campaign-factory
 
 # Typecheck
 bun run typecheck                      # or: ./node_modules/.bin/tsc --noEmit
 
-# Unit tests (6 tests: eligibility, window bounds, cap, logs)
+# Unit tests (15 tests: 3 demo campaigns x 5 payloads — eligibility, window,
+# min-spend, day-of-week, per-user cap, reset rollover, discount, digital)
 bun run test                           # or: bun test
+```
 
-# End-to-end simulation (runs the workflow against mock payloads in a simulated TEE)
-#   - the config files (config.staging.json / config.production.json) carry the mock POS payload
-#   - export SECRET_API_TOKEN so the Vault-DON secret resolves
-cd ..
-export SECRET_API_TOKEN="test-secret-token"
-cre workflow simulate ./b2b-campaign-factory --target=staging-settings -e .env
+### End-to-end simulation (HTTP-triggered, per-campaign payloads)
+
+```bash
+cd ..   # repo root
+
+# Run one payload against a campaign
+cre workflow simulate ./b2b-campaign-factory --target=staging-settings -e .env \
+  --http-payload ./b2b-campaign-factory/test-payloads/campaign-a-pass.json
+```
+
+- `--target=staging-settings` selects the config from `workflow.yaml` (`config.staging.json`).
+- `-e .env` loads the environment (including `SECRET_API_TOKEN`, read by the enclave at runtime — no shell export needed).
+- `--http-payload <path>` is the HTTP request body. Payload files live in `b2b-campaign-factory/test-payloads/`.
+
+The three demo campaigns (in `config.staging.json` / `config.production.json`):
+
+| id | Mechanic | Rules |
+|----|----------|-------|
+| 1 | Fixed $5 discount | min spend $20, no caps |
+| 2 | 20% cashback | Tue+Thu only, $50/user cap, resets weekly Mon 04:00 UTC |
+| 3 | Digital Merchandise "White Bear Plushie Medium" | min spend $15, total redeem cap 200 |
+
+Run all the bundled payloads (pass + fail per campaign) and check the verdict:
+
+```bash
+for p in b2b-campaign-factory/test-payloads/campaign-*.json; do
+  echo "===== $(basename $p) ====="
+  cre workflow simulate ./b2b-campaign-factory --target=staging-settings -e .env \
+    --http-payload "$p" 2>&1 | grep -E "Workflow Simulation Result|APPROVE|REJECT"
+done
+```
+
+Expected results:
+
+```
+campaign-a-pass.json            → APPROVE points=5 reason=ok            (fixed $5 discount)
+campaign-a-fail-below-min.json  → REJECT points=0 reason=below-min-spend
+campaign-b-pass-tue.json        → APPROVE points=20 reason=ok           (20% of $100)
+campaign-b-fail-monday.json     → REJECT points=0 reason=not-allowed-day
+campaign-b-fail-cap-exhausted.json → REJECT points=0 reason=cap-exhausted
+campaign-c-pass.json            → APPROVE points=1 reason=ok            (1 NFT redemption)
+campaign-c-fail-below-min.json  → REJECT points=0 reason=below-min-spend
 ```
 
 Simulation output shows the handler's `runtime.log` lines (debug only — removed for production) and ends with the verdict, e.g.:
 
 ```
-✓ Workflow compiled
 [USER LOG] secret loaded (27 chars)
-[USER LOG] payload: userAnchor=0x1234... merchant=burgera amountSpent=12 items=2
-[USER LOG] eligibility: ok eligible=true points=1.2000000000000002
-✓ Workflow Simulation Result: "APPROVE points=1.2000000000000002 reason=ok"
+[USER LOG] payload: campaign=1 user=0x1234... merchant=burgera amount=30 earnedInWindow=0
+[USER LOG] eligibility: ok eligible=true points=5
+✓ Workflow Simulation Result: "APPROVE points=5 reason=ok"
 ```
 
 ### Mock payloads
 
-Test-specific POS payloads live in the config files per environment:
+Per-campaign POS payloads live in `b2b-campaign-factory/test-payloads/` (one file per campaign × scenario). The campaign terms live in the `campaigns` map inside the config files:
 
 - `b2b-campaign-factory/config.staging.json` → `--target=staging-settings`
 - `b2b-campaign-factory/config.production.json` → `--target=production-settings`
 
-Each carries a `testPayload` object (`userAnchor`, `merchantId`, `amountSpent`, `timestamp`, `items`) plus the campaign terms. Edit the JSON to test different scenarios (below/above min-spend, window edges, cap).
+Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, disallowed day, cap exhaustion).
 
 ---
 
@@ -126,5 +166,6 @@ cre workflow deploy ./b2b-campaign-factory --target=staging-settings
 ## Notes
 
 - `runtime.log` calls are for simulation/testing only and **must be removed** before production (enclave logs are hidden in real execution anyway).
-- Config files bind a workflow to a campaign at deploy time (cron model); production per-campaign isolation is a deployment choice, not a code limitation.
+- The workflow is **HTTP-triggered** and serves multiple campaigns from one binary: the config holds a `campaigns` map keyed by `campaignId`, and each request body selects the campaign. Production per-campaign isolation (one workflow per campaign for billing/blast-radius) is a *deployment* choice, not a code limitation — the same binary can be deployed once per campaign, each with its own config, or once for all.
 - All on-chain writes via the CRE workflow (`EVMClient.writeReport`) are currently **commented** until the receiver contract (`IReceiver`-compatible `CampaignEscrow`) is deployed on Base Sepolia.
+- The `totalRedeemCap` and the reset-window *boundary* are carried in config and enforced by the caller/escrow; the workflow clamps the per-user cap against the caller-supplied `earnedInWindow`.

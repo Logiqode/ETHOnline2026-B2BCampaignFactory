@@ -21634,47 +21634,114 @@ var sendErrorResponse = (error2) => {
   }
   hostBindings.sendResponse(payload);
 };
-var configSchema = exports_external.object({
-  schedule: exports_external.string(),
-  campaignId: exports_external.number().int().nonnegative(),
-  minSpend: exports_external.number().nonnegative(),
-  rateBps: exports_external.number().int().positive(),
-  cap: exports_external.number().nonnegative(),
+var windowSchema = exports_external.object({
   start: exports_external.number().int().nonnegative(),
   end: exports_external.number().int().nonnegative(),
-  workflowOwner: exports_external.string(),
-  mockContractAddress: exports_external.string(),
-  testPayload: exports_external.object({
-    userAnchor: exports_external.string(),
-    merchantId: exports_external.string(),
-    amountSpent: exports_external.number().nonnegative(),
-    timestamp: exports_external.number().int().nonnegative(),
-    items: exports_external.array(exports_external.string()).optional()
-  })
+  escrow: exports_external.string()
 });
-function evaluateCampaign(payload, config) {
-  if (payload.timestamp < config.start) {
+var cashbackSchema = exports_external.object({
+  campaignId: exports_external.number().int().nonnegative(),
+  rewardType: exports_external.literal("cashback"),
+  minSpend: exports_external.number().nonnegative().default(0),
+  rateBps: exports_external.number().int().positive(),
+  cap: exports_external.number().nonnegative(),
+  capPeriod: exports_external.enum(["Lifetime", "Year", "Month", "Week", "Day"]).default("Lifetime"),
+  capPeriodCount: exports_external.number().int().positive().default(1),
+  capResetBasis: exports_external.enum(["Rolling", "Calendar"]).default("Rolling"),
+  capResetWeekday: exports_external.number().int().min(0).max(6).optional(),
+  capResetDay: exports_external.number().int().min(1).max(31).optional(),
+  capResetMonth: exports_external.number().int().min(1).max(12).optional(),
+  capResetTime: exports_external.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default("00:00"),
+  daysOfWeek: exports_external.number().int().min(0).max(127).default(0),
+  start: exports_external.number().int().nonnegative(),
+  end: exports_external.number().int().nonnegative(),
+  escrow: exports_external.string()
+});
+var discountSchema = exports_external.object({
+  campaignId: exports_external.number().int().nonnegative(),
+  rewardType: exports_external.literal("discount"),
+  minSpend: exports_external.number().nonnegative().default(0),
+  discountType: exports_external.enum(["percent", "fixed"]),
+  discountValue: exports_external.number().nonnegative(),
+  start: exports_external.number().int().nonnegative(),
+  end: exports_external.number().int().nonnegative(),
+  escrow: exports_external.string()
+});
+var digitalSchema = exports_external.object({
+  campaignId: exports_external.number().int().nonnegative(),
+  rewardType: exports_external.literal("digital"),
+  minSpend: exports_external.number().nonnegative().default(0),
+  digitalName: exports_external.string(),
+  totalRedeemCap: exports_external.number().nonnegative(),
+  start: exports_external.number().int().nonnegative(),
+  end: exports_external.number().int().nonnegative(),
+  escrow: exports_external.string()
+});
+var campaignSchema = exports_external.discriminatedUnion("rewardType", [cashbackSchema, discountSchema, digitalSchema]);
+var configSchema = exports_external.object({
+  campaigns: exports_external.record(exports_external.string(), campaignSchema)
+});
+var requestSchema = exports_external.object({
+  campaignId: exports_external.number().int().nonnegative(),
+  userAnchor: exports_external.string(),
+  merchantId: exports_external.string(),
+  amountSpent: exports_external.number().nonnegative(),
+  timestamp: exports_external.number().int().nonnegative(),
+  earnedInWindow: exports_external.number().nonnegative().default(0),
+  items: exports_external.array(exports_external.string()).optional()
+});
+function evaluate(request, campaign) {
+  if (request.timestamp < campaign.start) {
     return { eligible: false, points: 0, reason: "before-campaign-start" };
   }
-  if (payload.timestamp > config.end) {
+  if (request.timestamp > campaign.end) {
     return { eligible: false, points: 0, reason: "after-campaign-end" };
   }
-  if (payload.amountSpent < config.minSpend) {
+  if (request.amountSpent < campaign.minSpend) {
     return { eligible: false, points: 0, reason: "below-min-spend" };
   }
-  const points = Math.min(config.rateBps / 1e4 * payload.amountSpent, config.cap);
+  if (campaign.rewardType === "discount") {
+    const discount = campaign.discountType === "percent" ? campaign.discountValue / 100 * request.amountSpent : campaign.discountValue;
+    return { eligible: true, points: discount, reason: "ok" };
+  }
+  if (campaign.rewardType === "digital") {
+    return { eligible: true, points: 1, reason: "ok" };
+  }
+  if (campaign.daysOfWeek !== 0) {
+    const dayIndex = (Math.floor(request.timestamp / 86400) + 3) % 7;
+    if ((campaign.daysOfWeek >> dayIndex & 1) !== 1) {
+      return { eligible: false, points: 0, reason: "not-allowed-day" };
+    }
+  }
+  const raw = campaign.rateBps / 1e4 * request.amountSpent;
+  const remaining = campaign.cap - (request.earnedInWindow ?? 0);
+  const points = Math.min(raw, Math.max(remaining, 0));
+  if (points <= 0) {
+    return { eligible: false, points: 0, reason: "cap-exhausted" };
+  }
   return { eligible: true, points, reason: "ok" };
 }
-var onCronTrigger = (runtime2) => {
+function pointsToWei(points) {
+  const scaled = Math.round(points * 1000000000000000000);
+  return BigInt(scaled.toLocaleString("en-US", { useGrouping: false }));
+}
+var onHTTPTrigger = (runtime2, payload) => {
   const config = runtime2.config;
+  if (!payload.input || payload.input.length === 0) {
+    throw new Error("HTTP trigger payload is required");
+  }
   const apiToken = runtime2.getSecret({ id: "API_TOKEN" }).result().value;
   runtime2.log(`secret loaded (${apiToken.length} chars)`);
-  const payload = config.testPayload;
-  runtime2.log(`payload: userAnchor=${payload.userAnchor} merchant=${payload.merchantId}` + ` amountSpent=${payload.amountSpent} ts=${payload.timestamp} items=${(payload.items ?? []).length}`);
-  const verdict = evaluateCampaign(payload, config);
+  const request = requestSchema.parse(JSON.parse(Buffer.from(payload.input).toString("utf8")));
+  runtime2.log(`payload: campaign=${request.campaignId} user=${request.userAnchor} merchant=${request.merchantId}` + ` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`);
+  const campaign = config.campaigns[String(request.campaignId)];
+  if (!campaign) {
+    throw new Error(`Unknown campaignId: ${request.campaignId}`);
+  }
+  const verdict = evaluate(request, campaign);
   runtime2.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`);
   const donRuntime = runtime2.usingTheDons();
-  const reportPayload = encodeAbiParameters(parseAbiParameters("bool eligible, uint256 points"), [verdict.eligible, BigInt(Math.round(verdict.points * 1000000000000000000))]);
+  const reportPayload = encodeAbiParameters(parseAbiParameters("bool eligible, uint256 points"), [verdict.eligible, pointsToWei(verdict.points)]);
   donRuntime.report({
     encodedPayload: hexToBase64(reportPayload),
     encoderName: "evm",
@@ -21685,9 +21752,9 @@ var onCronTrigger = (runtime2) => {
   return `${verdict.eligible ? "APPROVE" : "REJECT"} points=${verdict.points} reason=${verdict.reason}`;
 };
 function initWorkflow(config) {
-  const cronTrigger = new cre.capabilities.CronCapability;
+  const httpTrigger = new cre.capabilities.HTTPCapability;
   return [
-    cre.handlerInTee(cronTrigger.trigger({ schedule: config.schedule }), onCronTrigger, [
+    cre.handlerInTee(httpTrigger.trigger({}), onHTTPTrigger, [
       { tee: "nitro", regions: ["us-west-2"] }
     ])
   ];
