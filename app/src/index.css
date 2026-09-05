@@ -545,6 +545,20 @@ textarea.input {
   flex-shrink: 0;
 }
 
+/* Compact redeem-cap input (not full width) */
+.cap-input {
+  width: 160px;
+  flex-shrink: 0;
+}
+
+/* Digital merchandise extra fields */
+.reward-digital-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 /* Insights / summary */
 .insight-row {
   display: flex;

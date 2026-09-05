@@ -53,25 +53,29 @@ const DEFAULT_RULE_VALUES: Record<string, string | number> = {
 }
 
 // ─── Campaign Rewards (type + mechanics) ───────────────────────
-const DEFAULT_REWARD_TYPE: RewardType = 'points'
+const DEFAULT_REWARD_TYPE: RewardType = 'monetary'
 const DEFAULT_REWARD_BLOCK_STATES: Record<string, 'enabled' | 'disabled'> = Object.fromEntries(
   REWARD_BLOCKS.map((b) => [b.id, b.state]),
 )
-const DEFAULT_REWARD_VALUES: Record<string, string | number> = {
+const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
   cashbackRate: 10,
   cashbackCap: 100,
+  cashbackToken: 'Bpoints',
   discountValue: 5,
   discountType: '%',
+  digitalName: 'Golden Badge',
+  digitalTransferable: true,
 }
 
 export default function CampaignWizard() {
   const [description, setDescription] = useState(DEFAULT_DESCRIPTION)
   const [terms, setTerms] = useState(DEFAULT_TERMS)
   const [ruleStates, setRuleStates] = useState<Record<string, RuleState>>(DEFAULT_RULE_STATES)
-  const [ruleValues, setRuleValues] = useState<Record<string, string | number>>(DEFAULT_RULE_VALUES)
+  const [ruleValues, setRuleValues] = useState<Record<string, string | number | boolean>>(DEFAULT_RULE_VALUES)
   const [rewardType, setRewardType] = useState<RewardType>(DEFAULT_REWARD_TYPE)
   const [rewardBlockStates, setRewardBlockStates] = useState<Record<string, 'enabled' | 'disabled'>>(DEFAULT_REWARD_BLOCK_STATES)
-  const [rewardValues, setRewardValues] = useState<Record<string, string | number>>(DEFAULT_REWARD_VALUES)
+  const [rewardValues, setRewardValues] = useState<Record<string, string | number | boolean>>(DEFAULT_REWARD_VALUES)
+  const [redeemCapEnabled, setRedeemCapEnabled] = useState(true)
   const [launched, setLaunched] = useState(false)
 
   const setDesc = <K extends keyof typeof DEFAULT_DESCRIPTION>(k: K, v: (typeof DEFAULT_DESCRIPTION)[K]) =>
@@ -88,32 +92,54 @@ export default function CampaignWizard() {
     if (current === 'production-limited') return
     setRuleStates((p) => ({ ...p, [id]: current === 'enabled' ? 'disabled' : 'enabled' }))
   }
-  const setRuleValue = (key: string, v: string | number) => setRuleValues((p) => ({ ...p, [key]: v }))
+  const setRuleValue = (key: string, v: string | number | boolean) => setRuleValues((p) => ({ ...p, [key]: v }))
 
-  const toggleRewardBlock = (id: string) =>
-    setRewardBlockStates((p) => ({ ...p, [id]: p[id] === 'enabled' ? 'disabled' : 'enabled' }))
-  const setRewardValue = (key: string, v: string | number) => setRewardValues((p) => ({ ...p, [key]: v }))
+  // Cashback and Discount are mutually exclusive. Turning one on turns the other off.
+  const toggleRewardBlock = (id: string) => {
+    if (id === 'cashback' || id === 'discount') {
+      setRewardBlockStates((p) => {
+        const willEnable = p[id] !== 'enabled' ? 'enabled' : 'disabled'
+        return {
+          cashback: id === 'cashback' ? willEnable : 'disabled',
+          discount: id === 'discount' ? willEnable : 'disabled',
+        }
+      })
+    } else {
+      setRewardBlockStates((p) => ({ ...p, [id]: p[id] === 'enabled' ? 'disabled' : 'enabled' }))
+    }
+  }
+  const setRewardValue = (key: string, v: string | number | boolean) => setRewardValues((p) => ({ ...p, [key]: v }))
 
   const effectiveEnd = terms.noEndDate ? NO_END_DATE_SENTINEL : terms.end
   const rewardTypeMeta = REWARD_TYPES.find((t) => t.value === rewardType)!
+
+  // The asset label shown for the reward (depends on type + mechanics).
+  const assetLabel = (() => {
+    const rewardLabel = rewardTypeMeta.label.toLowerCase()
+    if (rewardType === 'digital') return `${rewardValues.digitalName}${rewardValues.digitalTransferable ? '' : ' (non-transferable)'}`
+    if (rewardType === 'monetary' && rewardBlockStates.cashback === 'enabled') return rewardValues.cashbackToken as string
+    return rewardLabel
+  })()
 
   const summary = useMemo(() => {
     const rows: { label: string; value: string; mono?: boolean }[] = []
     rows.push({ label: 'Campaign', value: description.campaignName || '—' })
     rows.push({ label: 'Brands', value: description.participants.map((p) => `${p.name} (${BRAND_ROLES.find((r) => r.value === p.role)?.short})`).join(' · ') })
-    const rewardLabel = rewardTypeMeta.label.toLowerCase()
     const rewardParts: string[] = []
-    if (rewardBlockStates.cashback === 'enabled') rewardParts.push(`${rewardValues.cashbackRate}% cashback`)
-    if (rewardBlockStates.discount === 'enabled') rewardParts.push(`${rewardValues.discountValue}${rewardValues.discountType === '%' ? '%' : ' USD'} discount`)
-    rows.push({ label: 'Rewards', value: rewardParts.length ? rewardParts.join(' + ') : rewardLabel })
+    // Cashback/discount only apply to monetary rewards.
+    if (rewardType === 'monetary') {
+      if (rewardBlockStates.cashback === 'enabled') rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
+      if (rewardBlockStates.discount === 'enabled') rewardParts.push(`${rewardValues.discountValue}${rewardValues.discountType === '%' ? '%' : ' USD'} discount`)
+    }
+    rows.push({ label: 'Reward', value: rewardParts.length ? rewardParts.join(' + ') : assetLabel })
     if (ruleStates['min-spend'] === 'enabled') rows.push({ label: 'Min spend', value: `$${ruleValues.minSpend}` })
-    if (ruleStates['reward-cap'] === 'enabled') rows.push({ label: 'Per-user cap', value: `${ruleValues.cap} ${rewardTypeMeta.label}` })
-    rows.push({ label: 'Total redeem cap', value: `${terms.totalRedeemCap.toLocaleString()} ${rewardTypeMeta.label}` })
+    if (ruleStates['reward-cap'] === 'enabled') rows.push({ label: 'Per-user cap', value: `${ruleValues.cap} ${assetLabel}` })
+    if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${terms.totalRedeemCap.toLocaleString()} ${assetLabel}` })
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap}`, mono: true })
     return rows
-  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues])
+  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel])
 
   const enabledRules = Object.values(ruleStates).filter((s) => s === 'enabled').length
   const prodLimited = Object.values(ruleStates).filter((s) => s === 'production-limited').length
@@ -191,8 +217,18 @@ export default function CampaignWizard() {
           </div>
           <div className="field">
             <label className="field-label">Total redeem cap (campaign)</label>
-            <input className="input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
-            <span className="field-hint">Total rewards that can ever be issued, e.g. {terms.totalRedeemCap.toLocaleString()} {rewardTypeMeta.label}.</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button className={`rule-toggle${redeemCapEnabled ? ' on' : ''}`} onClick={() => setRedeemCapEnabled(!redeemCapEnabled)} aria-pressed={redeemCapEnabled} aria-label="Toggle total redeem cap">
+                <span className="rule-toggle-knob" />
+              </button>
+              <span className="field-hint" style={{ margin: 0 }}>Cap total rewards issued</span>
+            </div>
+            {redeemCapEnabled && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                <input className="input cap-input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
+                <span className="field-hint" style={{ margin: 0 }}>{terms.totalRedeemCap.toLocaleString()} {assetLabel}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -217,8 +253,30 @@ export default function CampaignWizard() {
           <span className="reward-type-hint">{rewardTypeMeta.hint}</span>
         </div>
 
+        {rewardType === 'digital' && (
+          <div className="reward-digital-fields">
+            <div className="field">
+              <label className="field-label">Merchandise name</label>
+              <input className="input" value={String(rewardValues.digitalName)} onChange={(e) => setRewardValue('digitalName', e.target.value)} placeholder="e.g. Golden Badge" />
+            </div>
+            <div className="field">
+              <label className="field-label">Transferable</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button className={`rule-toggle${rewardValues.digitalTransferable ? ' on' : ''}`} onClick={() => setRewardValue('digitalTransferable', !rewardValues.digitalTransferable)} aria-pressed={!!rewardValues.digitalTransferable} aria-label="Toggle transferable">
+                  <span className="rule-toggle-knob" />
+                </button>
+                <span className="field-hint" style={{ margin: 0 }}>
+                  {rewardValues.digitalTransferable ? 'Users can transfer. Admins/whitelisted can move on behalf.' : 'Non-transferable (soulbound).'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="reward-grid">
           {REWARD_BLOCKS.map((block) => {
+            // Only show cashback/discount blocks when reward type is monetary.
+            if (rewardType !== 'monetary') return null
             const on = rewardBlockStates[block.id] === 'enabled'
             return (
               <div key={block.id} className={`rule-item ${on ? 'enabled' : 'disabled'}`}>
@@ -327,7 +385,7 @@ export default function CampaignWizard() {
   )
 }
 
-function RuleInput({ field, value, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string }; value: string | number; onChange: (v: string | number) => void }) {
+function RuleInput({ field, value, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string }; value: string | number | boolean; onChange: (v: string | number | boolean) => void }) {
   if (field.type === 'select') {
     return <select className="select" value={String(value)} onChange={(e) => onChange(e.target.value)}>{field.options?.map((o) => <option key={o}>{o}</option>)}</select>
   }

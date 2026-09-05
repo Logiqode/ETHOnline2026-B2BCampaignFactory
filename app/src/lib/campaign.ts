@@ -8,7 +8,7 @@
 
 export type RuleState = 'enabled' | 'disabled' | 'production-limited'
 export type BrandRole = 'pos' | 'reward'
-export type RewardType = 'points' | 'digital' | 'physical'
+export type RewardType = 'monetary' | 'digital' | 'physical'
 
 export const BRAND_ROLES: { value: BrandRole; label: string; short: string }[] = [
   { value: 'pos', label: 'POS / Issuing (earn at)', short: 'POS' },
@@ -23,10 +23,12 @@ export interface BrandParticipant {
 }
 
 // ─── Reward asset types (NOT NULL selector) ────────────────────
+// 'monetary' covers cashback (points) and discount; 'digital' is an NFT-like
+// ERC-1155 badge/item; 'physical' is off-chain fulfillment.
 export const REWARD_TYPES: { value: RewardType; label: string; hint: string }[] = [
-  { value: 'points', label: 'Points', hint: 'Fungible, e.g. Bpoints' },
-  { value: 'digital', label: 'Digital Merchandise', hint: 'NFT-like ERC-1155 badge/item' },
-  { value: 'physical', label: 'Physical Merchandise', hint: 'Off-chain fulfillment' },
+  { value: 'monetary', label: 'Monetary', hint: 'Cashback points or a discount.' },
+  { value: 'digital', label: 'Digital Merchandise', hint: 'NFT-like ERC-1155 badge/item.' },
+  { value: 'physical', label: 'Physical Merchandise', hint: 'Off-chain fulfillment.' },
 ]
 
 // ─── Reward mechanics blocks ───────────────────────────────────
@@ -48,17 +50,19 @@ export interface RuleField {
   placeholder?: string
 }
 
-// Cashback: rate (%) + optional per-user cap. Discount: a value off.
+// Cashback: rate (%) + optional per-user cap + token/point name.
+// Discount: a value off. These two are mutually exclusive (user can't have both).
 export const REWARD_BLOCKS: RewardBlock[] = [
   {
     id: 'cashback',
     name: 'Cashback',
-    description: 'Return a % of the purchase as the reward asset.',
-    guide: 'Cashback rate and an optional per-user cap.',
+    description: 'Return a % of the purchase as points.',
+    guide: 'Cashback rate, an optional per-user cap, and the point/token name.',
     state: 'enabled',
     fields: [
       { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10' },
       { key: 'cashbackCap', label: 'Cashback cap / user (optional)', type: 'number', placeholder: '100' },
+      { key: 'cashbackToken', label: 'Point / token name', type: 'text', placeholder: 'Bpoints' },
     ],
   },
   {
