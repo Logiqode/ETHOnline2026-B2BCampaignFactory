@@ -48,6 +48,8 @@ export interface RuleField {
   type: 'number' | 'text' | 'datetime' | 'select' | 'multi' | 'time'
   options?: string[]
   placeholder?: string
+  min?: number
+  max?: number
 }
 
 // Cashback: rate (%) + optional per-user cap + token/point name.
@@ -111,7 +113,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
       { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1' },
       { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Rolling', 'Calendar'], hint: 'Rolling: window starts at the user\'s first earn in the current window — earns don\'t slide it, and after it expires the next earn re-anchors (counter resets). Calendar: fixed boundaries, e.g. every Monday 00:00.' },
       { key: 'capResetWeekday', label: 'Reset on', type: 'select', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], hint: 'Only for Calendar + Week — the weekday boundary.' },
-      { key: 'capResetDay', label: 'Reset on day', type: 'number', placeholder: '1', hint: 'Only for Calendar + Month/Year — the day of month (1-31).' },
+      { key: 'capResetDay', label: 'Reset on day', type: 'number', placeholder: '1', min: 1, max: 31, hint: 'Day of month (1-31). For months without that day, it falls back to the last available day — e.g. 31 → 30 (April/June), 28 (Feb), or 29 on leap years.' },
       { key: 'capResetMonth', label: 'Reset month', type: 'select', options: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], hint: 'Only for Calendar + Year — the month boundary.' },
       { key: 'capResetTime', label: 'Reset time', type: 'time', hint: 'Only for Calendar basis — the time of the boundary.' },
     ],
@@ -195,7 +197,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
   },
   {
     id: 'birth-month',
-    name: 'Date-specific',
+    name: 'Birth date',
     description: 'e.g. customer birth month is July.',
     guide: 'Reward based on a customer attribute (birth month).',
     state: 'production-limited',

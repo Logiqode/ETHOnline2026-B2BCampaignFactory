@@ -180,7 +180,7 @@ export default function CampaignWizard() {
         <p className="page-subtitle">
           Assemble a cross-brand campaign from building blocks: describe it, set the terms, toggle the rules,
           and choose the rewards. Launching deploys a <span className="mono">CampaignEscrow</span> clone +
-          paired ERC-1155 reward on Base Sepolia — gas sponsored by the platform.
+          paired ERC-1155 reward on Base Sepolia — contract deployment is free.
         </p>
       </div>
 
@@ -224,8 +224,9 @@ export default function CampaignWizard() {
               <input className="input" type="datetime-local" value={terms.start} onChange={(e) => setTerm('start', e.target.value)} />
             </div>
             <div className="field">
-              <div className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
                 <span>End date</span>
+                <span style={{ flex: 1 }} />
                 <button className={`rule-toggle${terms.noEndDate ? ' on' : ''}`} onClick={() => setTerm('noEndDate', !terms.noEndDate)} aria-pressed={terms.noEndDate} aria-label="No end date">
                   <span className="rule-toggle-knob" />
                 </button>
@@ -253,13 +254,14 @@ export default function CampaignWizard() {
                 <span className="rule-toggle-knob" />
               </button>
               <span className="field-hint" style={{ margin: 0 }}>Cap total rewards issued</span>
+              <span style={{ flex: 1 }} />
+              {redeemCapEnabled && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input className="input cap-input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
+                  <span className="field-hint" style={{ margin: 0 }}>{capUnit}{terms.totalRedeemCap.toLocaleString()}{capSuffix}</span>
+                </div>
+              )}
             </div>
-            {redeemCapEnabled && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
-                <input className="input cap-input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
-                <span className="field-hint" style={{ margin: 0 }}>{capUnit}{terms.totalRedeemCap.toLocaleString()}{capSuffix}</span>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -393,7 +395,7 @@ export default function CampaignWizard() {
                             ) : field.key === 'cap' ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
-                                <span className="field-suffix">{assetLabel}</span>
+                                <span className="field-suffix">{isDiscount ? 'USD' : assetLabel}</span>
                               </div>
                             ) : field.type === 'time' ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -432,7 +434,7 @@ export default function CampaignWizard() {
         ))}
         <div className="launch-panel" style={{ marginTop: 16 }}>
           <div className="launch-info">
-            {launched ? <strong>Deployed — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · one click, gas sponsored by the platform</>}
+            {launched ? <strong>Deployed — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · one click, contract deployment gas is free</>}
           </div>
           <button className="btn btn-primary" onClick={() => setLaunched(true)} disabled={launched}>
             {launched ? 'Deployed ✓' : 'Launch Campaign'}
@@ -448,12 +450,17 @@ export default function CampaignWizard() {
   )
 }
 
-function RuleInput({ field, value, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string }; value: string | number | boolean; onChange: (v: string | number | boolean) => void }) {
+function RuleInput({ field, value, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string; min?: number; max?: number }; value: string | number | boolean; onChange: (v: string | number | boolean) => void }) {
   if (field.type === 'select') {
     return <select className="select" value={String(value)} onChange={(e) => onChange(e.target.value)}>{field.options?.map((o) => <option key={o}>{o}</option>)}</select>
   }
   if (field.type === 'number') {
-    return <input className="input" type="number" value={Number(value)} onChange={(e) => onChange(Number(e.target.value))} placeholder={field.placeholder} />
+    return <input className="input" type="number" value={Number(value)} onChange={(e) => {
+      let v = Number(e.target.value)
+      if (field.min !== undefined && v < field.min) v = field.min
+      if (field.max !== undefined && v > field.max) v = field.max
+      onChange(v)
+    }} placeholder={field.placeholder} min={field.min} max={field.max} />
   }
   if (field.type === 'multi') {
     const selected = String(value || '').split(',').filter(Boolean)
