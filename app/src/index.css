@@ -574,6 +574,12 @@ textarea.input {
   flex-shrink: 0;
 }
 
+/* Shrunken per-tx cap inputs with a unit suffix beside them. */
+.cap-input-sm {
+  width: 90px;
+  flex-shrink: 0;
+}
+
 /* Compact fee-split field (two companies, hackathon scope) */
 .fee-split-input {
   width: 88px;

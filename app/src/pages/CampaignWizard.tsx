@@ -67,10 +67,13 @@ const DEFAULT_REWARD_BLOCK_STATES: Record<string, 'enabled' | 'disabled'> = Obje
 )
 const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
   cashbackRate: 10,
-  cashbackCap: 100,
+  cashbackPerTxCapEnabled: false,
+  cashbackPerTxCap: 50,
   cashbackToken: 'Bpoints',
   discountValue: 5,
-  discountType: '%',
+  discountPerTxCapEnabled: false,
+  discountPerTxCap: 20,
+  discountType: 'Percentage (%)',
   digitalName: 'Golden Badge',
   digitalTransferable: true,
 }
@@ -193,8 +196,16 @@ export default function CampaignWizard() {
     const rewardParts: string[] = []
     // Cashback/discount only apply to monetary rewards.
     if (rewardType === 'monetary') {
-      if (rewardBlockStates.cashback === 'enabled') rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
-      if (rewardBlockStates.discount === 'enabled') rewardParts.push(`${rewardValues.discountValue}${rewardValues.discountType === '%' ? '%' : ' USD'} discount`)
+      if (rewardBlockStates.cashback === 'enabled') {
+        rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
+        if (rewardValues.cashbackPerTxCapEnabled) rewardParts.push(`per-tx cap ${capUnit}${rewardValues.cashbackPerTxCap}${capSuffix}`)
+      }
+      if (rewardBlockStates.discount === 'enabled') {
+        const isPct = rewardValues.discountType === 'Percentage (%)'
+        rewardParts.push(`${rewardValues.discountValue}${isPct ? '%' : ' USD'} discount`)
+        // Flat discounts cap themselves at the discount value; % discounts use the input.
+        if (rewardValues.discountPerTxCapEnabled) rewardParts.push(`per-tx cap $${isPct ? rewardValues.discountPerTxCap : rewardValues.discountValue}`)
+      }
     }
     rows.push({ label: 'Reward', value: rewardParts.length ? rewardParts.join(' + ') : assetLabel })
     if (ruleStates['min-spend'] === 'enabled') rows.push({ label: 'Min spend', value: `$${ruleValues.minSpend}` })
@@ -219,7 +230,12 @@ export default function CampaignWizard() {
     if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${capUnit}${terms.totalRedeemCap.toLocaleString()}${capSuffix}` })
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
-    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap}`, mono: true })
+    // Terms only carry a cap when its mechanic block is actually enabled.
+    const perTxCap = rewardBlockStates.cashback === 'enabled' && rewardValues.cashbackPerTxCapEnabled ? rewardValues.cashbackPerTxCap : null
+    const discountPerTxCap = rewardBlockStates.discount === 'enabled' && rewardValues.discountPerTxCapEnabled
+      ? (rewardValues.discountType === 'Percentage (%)' ? rewardValues.discountPerTxCap : rewardValues.discountValue)
+      : null
+    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'}`, mono: true })
     return rows
   }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix, launch])
 
@@ -448,7 +464,7 @@ export default function CampaignWizard() {
               <span style={{ flex: 1 }} />
               {redeemCapEnabled && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input className="input cap-input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
+                  <NumericInput className="input cap-input" value={terms.totalRedeemCap} min={0} onChange={(v) => setTerm('totalRedeemCap', v)} />
                   <span className="field-hint" style={{ margin: 0 }}>{capUnit}{terms.totalRedeemCap.toLocaleString()}{capSuffix}</span>
                 </div>
               )}
@@ -518,12 +534,47 @@ export default function CampaignWizard() {
                   <div className="rule-body">
                     <div className="rule-desc" style={{ color: 'var(--text-tertiary)' }}>{block.guide}</div>
                     <div className={`rule-config ${block.fields.length === 1 ? 'full' : ''}`}>
-                      {block.fields.map((field) => (
-                        <div className="field" key={field.key}>
-                          <label className="field-label">{field.label}</label>
-                          <RuleInput field={field} value={rewardValues[field.key]} onChange={(v) => setRewardValue(field.key, v)} />
-                        </div>
-                      ))}
+                      {block.fields.map((field) => {
+                        // Per-tx cap inputs only appear when their toggle is ON.
+                        const capToggleKey = `${field.key.replace(/PerTxCap$/, '')}PerTxCapEnabled`
+                        if (field.key.endsWith('PerTxCap') && !rewardValues[capToggleKey]) return null
+                        // A flat discount caps itself: per-tx cap mirrors the Discount
+                        // value read-only. Only %-type discounts get an inputtable cap.
+                        if (block.id === 'discount' && field.key === 'discountPerTxCap' && rewardValues.discountType !== 'Percentage (%)') {
+                          return (
+                            <div className="field" key={field.key}>
+                              <label className="field-label">{field.label}</label>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input className="input cap-input-sm" value={String(rewardValues.discountValue)} readOnly aria-label="Per transaction cap (mirrors flat discount)" />
+                                <span className="field-suffix">USD</span>
+                              </div>
+                              <span className="field-hint">Flat discount — capped at the discount value itself.</span>
+                            </div>
+                          )
+                        }
+                        return (
+                          <div className="field" key={field.key}>
+                            <label className="field-label">{field.label}</label>
+                            <RuleInput
+                              field={field}
+                              value={rewardValues[field.key]}
+                              // Discount >100% would over-reward — cap % mode at 100.
+                              maxOverride={block.id === 'discount' && field.key === 'discountValue' && rewardValues.discountType === 'Percentage (%)' ? 100 : undefined}
+                              unit={block.id === 'cashback' && field.key === 'cashbackPerTxCap' ? String(rewardValues.cashbackToken || 'Bpoints')
+                                : block.id === 'discount' && field.key === 'discountPerTxCap' ? 'USD'
+                                : undefined}
+                              onChange={(v) => {
+                                // Switching Type to Percentage must clamp a value typed
+                                // under Flat (which has no 100 ceiling) — e.g. 1000 -> 100.
+                                if (field.key === 'discountType' && v === 'Percentage (%)' && Number(rewardValues.discountValue) > 100) {
+                                  setRewardValue('discountValue', 100)
+                                }
+                                setRewardValue(field.key, v)
+                              }}
+                            />
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -644,17 +695,78 @@ export default function CampaignWizard() {
   )
 }
 
-function RuleInput({ field, value, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string; min?: number; max?: number }; value: string | number | boolean; onChange: (v: string | number | boolean) => void }) {
+// Numeric text input: while focused, stores raw text so select-all + backspace
+// leaves the field truly blank (no forced "0" to fight with). On blur, blank or
+// partial input resolves to a clamped number — blank defaults to 0.
+function NumericInput({ value, onChange, min, max, placeholder, className }: {
+  value: number
+  onChange: (v: number) => void
+  min?: number
+  max?: number
+  placeholder?: string
+  className?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null) // null = not editing
+  // Finite guard: stale HMR state or a bad Number() parse must never render "NaN".
+  const safeValue = Number.isFinite(value) ? value : 0
+  const shown = draft !== null ? draft : String(safeValue)
+  return (
+    <input
+      className={className ?? 'input'}
+      type="text"
+      inputMode="decimal"
+      value={shown}
+      placeholder={placeholder ?? '0'}
+      onChange={(e) => {
+        const v = e.target.value
+        // No minus sign — negative values aren't valid for any wizard number.
+        if (v === '' || /^\d*\.?\d*$/.test(v)) setDraft(v)
+      }}
+      onBlur={() => {
+        if (draft === null) return
+        let n = draft.trim() === '' ? 0 : Number(draft)
+        if (Number.isNaN(n)) n = 0
+        // Blank/invalid resolves to the floor (default 0) — never negative.
+        const lo = min ?? 0
+        if (n < lo) n = lo
+        if (max !== undefined && n > max) n = max
+        onChange(n)
+        setDraft(null)
+      }}
+    />
+  )
+}
+
+function RuleInput({ field, value, maxOverride, unit, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string; min?: number; max?: number; hint?: string }; value: string | number | boolean; maxOverride?: number; unit?: string; onChange: (v: string | number | boolean) => void }) {
   if (field.type === 'select') {
     return <select className="select" value={String(value)} onChange={(e) => onChange(e.target.value)}>{field.options?.map((o) => <option key={o}>{o}</option>)}</select>
   }
   if (field.type === 'number') {
-    return <input className="input" type="number" value={Number(value)} onChange={(e) => {
-      let v = Number(e.target.value)
-      if (field.min !== undefined && v < field.min) v = field.min
-      if (field.max !== undefined && v > field.max) v = field.max
-      onChange(v)
-    }} placeholder={field.placeholder} min={field.min} max={field.max} />
+    const input = <NumericInput value={Number(value)} min={field.min} max={maxOverride ?? field.max} placeholder={field.placeholder} onChange={(v) => onChange(v)} />
+    if (!unit) return input
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div className="cap-input-sm">{input}</div>
+        <span className="field-suffix">{unit}</span>
+      </div>
+    )
+  }
+  if (field.type === 'toggle') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button
+          className={`rule-toggle${value ? ' on' : ''}`}
+          onClick={() => onChange(!value)}
+          aria-pressed={!!value}
+          aria-label={`Toggle ${field.label}`}
+        >
+          <span className="rule-toggle-knob" />
+        </button>
+        <span className="field-hint" style={{ margin: 0 }}>
+          {value ? 'ON' : 'OFF'}{field.hint ? ` — ${field.hint}` : ''}
+        </span>
+      </div>
+    )
   }
   if (field.type === 'multi') {
     const selected = String(value || '').split(',').filter(Boolean)

@@ -45,7 +45,7 @@ export interface RuleField {
   key: string
   label: string
   hint?: string
-  type: 'number' | 'text' | 'datetime' | 'select' | 'multi' | 'time'
+  type: 'number' | 'text' | 'datetime' | 'select' | 'multi' | 'time' | 'toggle'
   options?: string[]
   placeholder?: string
   min?: number
@@ -59,23 +59,26 @@ export const REWARD_BLOCKS: RewardBlock[] = [
     id: 'cashback',
     name: 'Cashback',
     description: 'Return a % of the purchase as points.',
-    guide: 'Cashback rate, an optional per-user cap, and the point/token name.',
+    guide: 'Cashback rate, an optional per-transaction cap, and the point/token name.',
     state: 'enabled',
     fields: [
-      { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10' },
-      { key: 'cashbackCap', label: 'Cashback cap', type: 'number', placeholder: '100' },
+      { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10', min: 0, max: 100 },
+      { key: 'cashbackPerTxCapEnabled', label: 'Per transaction cap', type: 'toggle', hint: 'Cap the points earned on a single purchase.' },
       { key: 'cashbackToken', label: 'Point / token name', type: 'text', placeholder: 'Bpoints' },
+      { key: 'cashbackPerTxCap', label: 'Per transaction cap', type: 'number', placeholder: '50', min: 0 },
     ],
   },
   {
     id: 'discount',
     name: 'Discount',
     description: 'Simply discount the price by a fixed amount or %.',
-    guide: 'A flat discount applied at checkout.',
+    guide: 'A flat or % discount, with an optional per-transaction cap.',
     state: 'disabled',
     fields: [
-      { key: 'discountValue', label: 'Discount', type: 'number', placeholder: '5' },
-      { key: 'discountType', label: 'Type', type: 'select', options: ['%', 'USD'] },
+      { key: 'discountValue', label: 'Discount', type: 'number', placeholder: '5', min: 0 },
+      { key: 'discountPerTxCapEnabled', label: 'Per transaction cap', type: 'toggle', hint: 'Cap the discount amount on a single purchase.' },
+      { key: 'discountType', label: 'Type', type: 'select', options: ['Percentage (%)', 'Flat/Fixed'] },
+      { key: 'discountPerTxCap', label: 'Per transaction cap', type: 'number', placeholder: '20', min: 0 },
     ],
   },
 ]
@@ -99,7 +102,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     description: 'Reward only when the purchase total is at least X.',
     guide: 'The minimum USD amount a purchase must reach to qualify.',
     state: 'enabled',
-    fields: [{ key: 'minSpend', label: 'Min spend (USD)', type: 'number', placeholder: '10' }],
+    fields: [{ key: 'minSpend', label: 'Min spend (USD)', type: 'number', placeholder: '10', min: 0 }],
   },
   {
     id: 'reward-cap',
@@ -108,9 +111,9 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     guide: 'Caps cumulative rewards per customer. Pick a reset period — Lifetime, or every N days/weeks/months/years.',
     state: 'enabled',
     fields: [
-      { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' },
+      { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100', min: 0 },
       { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day'] },
-      { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1' },
+      { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1', min: 1 },
       { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Rolling', 'Calendar'], hint: 'Rolling: window starts at the user\'s first earn in the current window — earns don\'t slide it, and after it expires the next earn re-anchors (counter resets). Calendar: fixed boundaries, e.g. every Monday 00:00.' },
       { key: 'capResetWeekday', label: 'Reset on', type: 'select', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], hint: 'Only for Calendar + Week — the weekday boundary.' },
       { key: 'capResetDay', label: 'Reset on day', type: 'number', placeholder: '1', min: 1, max: 31, hint: 'Day of month (1-31). For months without that day, it falls back to the last available day — e.g. 31 → 30 (April/June), 28 (Feb), or 29 on leap years.' },
