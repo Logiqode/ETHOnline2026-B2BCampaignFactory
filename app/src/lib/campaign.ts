@@ -45,7 +45,7 @@ export interface RuleField {
   key: string
   label: string
   hint?: string
-  type: 'number' | 'text' | 'datetime' | 'select'
+  type: 'number' | 'text' | 'datetime' | 'select' | 'multi'
   options?: string[]
   placeholder?: string
 }
@@ -102,18 +102,24 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
   {
     id: 'reward-cap',
     name: 'Reward cap / user',
-    description: 'Lifetime reward a single user can earn in this campaign.',
-    guide: 'Caps cumulative rewards per customer (anti-abuse).',
+    description: 'Lifetime or periodic reward cap per user.',
+    guide: 'Caps cumulative rewards per customer. Pick a reset period (lifetime, or every N years/months/weeks/days).',
     state: 'enabled',
-    fields: [{ key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' }],
+    fields: [
+      { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100' },
+      { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day'] },
+      { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1' },
+    ],
   },
   {
     id: 'day-of-week',
     name: 'Day of week',
-    description: 'Weekend only / weekdays / a specific day.',
-    guide: 'Only reward purchases on chosen days.',
+    description: 'Reward only on selected days.',
+    guide: 'Pick one or more days (or none for any day).',
     state: 'disabled',
-    fields: [{ key: 'day', label: 'Day', type: 'select', options: ['Any', 'Weekends', 'Weekdays', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] }],
+    fields: [
+      { key: 'day', label: 'Days', type: 'multi', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] },
+    ],
   },
   {
     id: 'member-tier',

@@ -39,7 +39,9 @@ const DEFAULT_RULE_STATES: Record<string, RuleState> = Object.fromEntries(
 const DEFAULT_RULE_VALUES: Record<string, string | number> = {
   minSpend: 10,
   cap: 100,
-  day: 'Any',
+  capPeriod: 'Lifetime',
+  capPeriodCount: 1,
+  day: '',
   tier: 'Tier 2',
   period: 30,
   max: 1,
@@ -121,6 +123,11 @@ export default function CampaignWizard() {
     return rewardLabel
   })()
 
+  // When Discount is selected, the cap/total are $ denominated.
+  const isDiscount = rewardType === 'monetary' && rewardBlockStates.discount === 'enabled'
+  const capUnit = isDiscount ? '$' : ''
+  const capSuffix = isDiscount ? '' : ` ${assetLabel}`
+
   const summary = useMemo(() => {
     const rows: { label: string; value: string; mono?: boolean }[] = []
     rows.push({ label: 'Campaign', value: description.campaignName || '—' })
@@ -133,13 +140,18 @@ export default function CampaignWizard() {
     }
     rows.push({ label: 'Reward', value: rewardParts.length ? rewardParts.join(' + ') : assetLabel })
     if (ruleStates['min-spend'] === 'enabled') rows.push({ label: 'Min spend', value: `$${ruleValues.minSpend}` })
-    if (ruleStates['reward-cap'] === 'enabled') rows.push({ label: 'Per-user cap', value: `${ruleValues.cap} ${assetLabel}` })
-    if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${terms.totalRedeemCap.toLocaleString()} ${assetLabel}` })
+    if (ruleStates['reward-cap'] === 'enabled') {
+      const capPeriod = ruleValues.capPeriod
+      const capCount = Number(ruleValues.capPeriodCount || 1)
+      const periodLabel = capPeriod === 'Lifetime' ? 'lifetime' : `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''}`
+      rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (${periodLabel})` })
+    }
+    if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${capUnit}${terms.totalRedeemCap.toLocaleString()}${capSuffix}` })
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap}`, mono: true })
     return rows
-  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel])
+  }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix])
 
   const enabledRules = Object.values(ruleStates).filter((s) => s === 'enabled').length
   const prodLimited = Object.values(ruleStates).filter((s) => s === 'production-limited').length
@@ -207,13 +219,15 @@ export default function CampaignWizard() {
               </button>
               <span className="field-hint" style={{ margin: 0 }}>No end date</span>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              <input className="input" style={{ flex: 1, opacity: terms.noEndDate ? 0.5 : 1 }} type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} disabled={terms.noEndDate} />
-              <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="End timezone" disabled={terms.noEndDate}>
-                {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
-              </select>
-            </div>
-            <span className="field-hint">{terms.noEndDate ? 'No end date — end date fixed to a far-future sentinel (not enforced).' : 'Campaign ends at this datetime.'}</span>
+            {!terms.noEndDate && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <input className="input" style={{ flex: 1 }} type="datetime-local" value={effectiveEnd} onChange={(e) => setTerm('end', e.target.value)} />
+                <select className="select timezone-select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="End timezone">
+                  {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+                </select>
+              </div>
+            )}
+            <span className="field-hint">{terms.noEndDate ? 'No end date — campaign runs indefinitely.' : 'Campaign ends at this datetime.'}</span>
           </div>
           <div className="field">
             <label className="field-label">Total redeem cap (campaign)</label>
@@ -226,7 +240,7 @@ export default function CampaignWizard() {
             {redeemCapEnabled && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
                 <input className="input cap-input" type="number" min={0} value={terms.totalRedeemCap} onChange={(e) => setTerm('totalRedeemCap', Number(e.target.value))} />
-                <span className="field-hint" style={{ margin: 0 }}>{terms.totalRedeemCap.toLocaleString()} {assetLabel}</span>
+                <span className="field-hint" style={{ margin: 0 }}>{capUnit}{terms.totalRedeemCap.toLocaleString()}{capSuffix}</span>
               </div>
             )}
           </div>
@@ -316,7 +330,7 @@ export default function CampaignWizard() {
           <span className="badge" style={{ marginLeft: 8 }}>{enabledRules} enabled · {prodLimited} production-limited</span>
         </div>
         <div className="card-desc">
-          Optional eligibility gates. ENABLED and DISABLED rules are toggleable; PRODUCTION-LIMITED rules are
+          Optional eligibility gates. ON and OFF rules are toggleable; PRODUCTION-LIMITED rules are
           showcased (deferred) and not interactable.
         </div>
         <div className="rule-grid">
@@ -336,18 +350,22 @@ export default function CampaignWizard() {
                     <div className="rule-name">{rule.name}</div>
                     <div className="rule-desc">{rule.description}</div>
                   </div>
-                  <span className="rule-status">{limited ? 'PRODUCTION-LIMITED' : on ? 'ENABLED' : 'DISABLED'}</span>
+                  <span className="rule-status">{limited ? 'PRODUCTION-LIMITED' : on ? 'ON' : 'OFF'}</span>
                 </div>
                 {on && (
                   <div className="rule-body">
                     <div className="rule-desc" style={{ color: 'var(--text-tertiary)' }}>{rule.guide}</div>
                     <div className={`rule-config ${rule.fields.length === 1 ? 'full' : ''}`}>
-                      {rule.fields.map((field) => (
-                        <div className="field" key={field.key}>
-                          <label className="field-label">{field.label}</label>
-                          <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
-                        </div>
-                      ))}
+                      {rule.fields.map((field) => {
+                        // For reward-cap: hide the "Every N" count field when period is Lifetime.
+                        if (field.key === 'capPeriodCount' && ruleValues.capPeriod === 'Lifetime') return null
+                        return (
+                          <div className="field" key={field.key}>
+                            <label className="field-label">{field.label}</label>
+                            <RuleInput field={field} value={ruleValues[field.key]} onChange={(v) => setRuleValue(field.key, v)} />
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -391,6 +409,28 @@ function RuleInput({ field, value, onChange }: { field: { key: string; label: st
   }
   if (field.type === 'number') {
     return <input className="input" type="number" value={Number(value)} onChange={(e) => onChange(Number(e.target.value))} placeholder={field.placeholder} />
+  }
+  if (field.type === 'multi') {
+    const selected = String(value || '').split(',').filter(Boolean)
+    const toggle = (opt: string) => {
+      const next = selected.includes(opt) ? selected.filter((s) => s !== opt) : [...selected, opt]
+      onChange(next.join(','))
+    }
+    return (
+      <div className="multi-select">
+        {field.options?.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            className={`multi-chip${selected.includes(opt) ? ' on' : ''}`}
+            onClick={() => toggle(opt)}
+            aria-pressed={selected.includes(opt)}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    )
   }
   return <input className="input" type="text" value={String(value)} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} />
 }
