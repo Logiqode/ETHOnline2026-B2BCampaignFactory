@@ -28,6 +28,9 @@ library CampaignRulesLib {
         uint256 cap;             // per-user reward cap
         bool   dayOfWeekEnabled; // gate on allowed days of the week
         uint8  daysOfWeek;       // bitmask: Mon(1)..Sun(64); 0 = any day
+        bool   flatEnabled;      // reward mechanic: false = percent (rateBps% of spend), true = flat (flatValue per purchase)
+        uint256 flatValue;       // flat cashback per qualifying purchase (18-decimals reward units)
+        bool   redeemable;       // true = cashback (points spendable at a POS); false = discount proof-of-savings (totalSaved only, nothing redeemable)
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -42,6 +45,9 @@ library CampaignRulesLib {
     }
 
     /// @notice Compute reward points, applying the per-user cap only if the rule is on.
+    ///         Two mechanics: flat (flatEnabled → flatValue per purchase) and percent
+    ///         (rateBps% of spend). For non-redeemable campaigns (discount) "points"
+    ///         are dollars saved — they accumulate in totalBalance only.
     /// @return points Reward to mint. Uncapped when capEnabled is false.
     function computePoints(
         Rules memory r,
@@ -49,7 +55,7 @@ library CampaignRulesLib {
         uint256 amountSpent,
         uint256 alreadyEarned
     ) internal pure returns (uint256 points) {
-        points = (rateBps * amountSpent) / 10_000;
+        points = r.flatEnabled ? r.flatValue : (rateBps * amountSpent) / 10_000;
         if (!r.capEnabled) return points;
         uint256 remaining = r.cap - alreadyEarned;
         points = points > remaining ? remaining : points;

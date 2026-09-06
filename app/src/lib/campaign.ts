@@ -58,11 +58,13 @@ export const REWARD_BLOCKS: RewardBlock[] = [
   {
     id: 'cashback',
     name: 'Cashback',
-    description: 'Return a % of the purchase as points.',
-    guide: 'Cashback rate, an optional per-transaction cap, and the point/token name.',
+    description: 'Return a % of the purchase as points, or a fixed amount per purchase.',
+    guide: 'Cashback mechanic (percent or flat), an optional per-transaction cap, and the point/token name.',
     state: 'enabled',
     fields: [
-      { key: 'cashbackRate', label: 'Cashback rate (%)', type: 'number', placeholder: '10', min: 0, max: 100 },
+      { key: 'cashbackType', label: 'Type', type: 'select', options: ['Percentage (%)', 'Flat/Fixed'], hint: 'Percentage: points = rate% of the purchase. Flat/Fixed: every qualifying purchase earns the same fixed amount.' },
+      { key: 'cashbackRate', label: 'Cashback (%)', type: 'number', placeholder: '10', min: 0, max: 100 },
+      { key: 'cashbackFlat', label: 'Cashback (fixed)', type: 'number', placeholder: '2', min: 0, hint: 'Only for Flat/Fixed — the fixed amount earned per qualifying purchase.' },
       { key: 'cashbackPerTxCapEnabled', label: 'Per transaction cap', type: 'toggle', hint: 'Cap the points earned on a single purchase.' },
       { key: 'cashbackToken', label: 'Point / token name', type: 'text', placeholder: 'Bpoints' },
       { key: 'cashbackPerTxCap', label: 'Per transaction cap', type: 'number', placeholder: '50', min: 0 },
@@ -71,8 +73,8 @@ export const REWARD_BLOCKS: RewardBlock[] = [
   {
     id: 'discount',
     name: 'Discount',
-    description: 'Simply discount the price by a fixed amount or %.',
-    guide: 'A flat or % discount, with an optional per-transaction cap.',
+    description: 'Discount the price by a fixed amount or % — tracked as proof-of-savings.',
+    guide: 'A flat or % discount. Savings accumulate in the user\'s totalSaved counter — nothing is redeemable at a POS.',
     state: 'disabled',
     fields: [
       { key: 'discountValue', label: 'Discount', type: 'number', placeholder: '5', min: 0 },

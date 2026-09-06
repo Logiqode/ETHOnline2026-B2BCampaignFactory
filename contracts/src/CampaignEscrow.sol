@@ -30,6 +30,13 @@ import {CampaignRulesLib} from "./CampaignRulesLib.sol";
 ///      - Spend (redeem) : unspentBalance -= amount (totalBalance untouched); burn tokens
 ///      Spent (history) is derivable as totalBalance - unspentBalance, but the lineage
 ///      number itself (totalBalance) is preserved forever.
+///
+///      REWARD MECHANICS (rules.redeemable / rules.flatEnabled):
+///      - Cashback (redeemable = true): percent (rateBps% of spend) or flat
+///        (rules.flatValue per purchase) — full UTXO ledger, spendable at a POS.
+///      - Discount (redeemable = false): proof-of-savings. points = dollars saved;
+///        totalBalance accumulates as the user's totalSaved counter, unspentBalance
+///        stays 0, nothing is minted, nothing is redeemable at any POS.
 contract CampaignEscrow {
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -124,7 +131,12 @@ contract CampaignEscrow {
         if (initialized_) revert CampaignEscrow__AlreadyInitialized();
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
-        if (terms_.rateBps == 0) revert CampaignEscrow__ZeroPoints();
+        if (terms_.rateBps == 0 && !terms_.rules.flatEnabled) revert CampaignEscrow__ZeroPoints();
+        // Flat mechanic: the per-purchase value must be positive and 2-decimal clean.
+        if (terms_.rules.flatEnabled) {
+            if (terms_.rules.flatValue == 0) revert CampaignEscrow__ZeroPoints();
+            _requireAtMost2Decimals(terms_.rules.flatValue);
+        }
         // Only validate the per-user cap's granularity when the cap rule is actually on.
         // (When cap is disabled, `cap=0` is the natural "no cap" value and is valid.)
         if (terms_.rules.capEnabled) _requireAtMost2Decimals(terms_.rules.cap);
@@ -307,14 +319,22 @@ contract CampaignEscrow {
         uint256 amountSpent,
         uint256 points
     ) internal {
-        // Unspent balance grows with each earn; totalBalance is the lifetime lineage.
-        proof.unspentBalance += points;
+        // totalBalance always accumulates — for discount campaigns it IS the
+        // product: a proof-of-savings counter (totalSaved), never spendable.
         proof.totalBalance += points;
-        usedNullifiers[nullifier] = true;
-        _accruePlatformFee(points);
-        emit Claim(nullifier, recipient, points, amountSpent);
 
-        CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
+        // Redeemable (cashback) campaigns grow the spendable balance and mint
+        // ERC-1155. Discount campaigns (redeemable = false) stop here: unspent
+        // stays 0 forever, so any redeemFor reverts InsufficientBalance — there
+        // is nothing to spend at a POS.
+        if (terms.rules.redeemable) {
+            proof.unspentBalance += points;
+            _accruePlatformFee(points);
+            CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
+        }
+
+        usedNullifiers[nullifier] = true;
+        emit Claim(nullifier, recipient, points, amountSpent);
     }
 
     /// @dev Recipient's lifetime earned (for onReport's points re-verification).

@@ -66,7 +66,9 @@ const DEFAULT_REWARD_BLOCK_STATES: Record<string, 'enabled' | 'disabled'> = Obje
   REWARD_BLOCKS.map((b) => [b.id, b.state]),
 )
 const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
+  cashbackType: 'Percentage (%)',
   cashbackRate: 10,
+  cashbackFlat: 2,
   cashbackPerTxCapEnabled: false,
   cashbackPerTxCap: 50,
   cashbackToken: 'Bpoints',
@@ -197,12 +199,16 @@ export default function CampaignWizard() {
     // Cashback/discount only apply to monetary rewards.
     if (rewardType === 'monetary') {
       if (rewardBlockStates.cashback === 'enabled') {
-        rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
+        if (rewardValues.cashbackType === 'Flat/Fixed') {
+          rewardParts.push(`${capUnit}${rewardValues.cashbackFlat ?? 0} flat cashback per purchase in ${rewardValues.cashbackToken}`)
+        } else {
+          rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
+        }
         if (rewardValues.cashbackPerTxCapEnabled) rewardParts.push(`per-tx cap ${capUnit}${rewardValues.cashbackPerTxCap}${capSuffix}`)
       }
       if (rewardBlockStates.discount === 'enabled') {
         const isPct = rewardValues.discountType === 'Percentage (%)'
-        rewardParts.push(`${rewardValues.discountValue}${isPct ? '%' : ' USD'} discount`)
+        rewardParts.push(`${rewardValues.discountValue}${isPct ? '%' : ' USD'} discount (proof-of-savings — accrues to the user's totalSaved, nothing redeemable)`)
         // Flat discounts cap themselves at the discount value; % discounts use the input.
         if (rewardValues.discountPerTxCapEnabled) rewardParts.push(`per-tx cap $${isPct ? rewardValues.discountPerTxCap : rewardValues.discountValue}`)
       }
@@ -538,6 +544,24 @@ export default function CampaignWizard() {
                         // Per-tx cap inputs only appear when their toggle is ON.
                         const capToggleKey = `${field.key.replace(/PerTxCap$/, '')}PerTxCapEnabled`
                         if (field.key.endsWith('PerTxCap') && !rewardValues[capToggleKey]) return null
+                        // Cashback mechanic visibility: rate (%) only for percent,
+                        // flat-per-purchase only for Flat/Fixed.
+                        if (block.id === 'cashback' && field.key === 'cashbackRate' && rewardValues.cashbackType === 'Flat/Fixed') return null
+                        if (block.id === 'cashback' && field.key === 'cashbackFlat' && rewardValues.cashbackType !== 'Flat/Fixed') return null
+                        // A flat cashback caps itself per-tx: the cap mirrors the
+                        // flat value read-only (same pattern as flat discount).
+                        if (block.id === 'cashback' && field.key === 'cashbackPerTxCap' && rewardValues.cashbackType === 'Flat/Fixed') {
+                          return (
+                            <div className="field" key={field.key}>
+                              <label className="field-label">{field.label}</label>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input className="input cap-input-sm" value={String(rewardValues.cashbackFlat ?? 0)} readOnly aria-label="Per transaction cap (mirrors flat cashback)" />
+                                <span className="field-suffix">{String(rewardValues.cashbackToken || 'Bpoints')}</span>
+                              </div>
+                              <span className="field-hint">Flat cashback — capped at the flat value itself.</span>
+                            </div>
+                          )
+                        }
                         // A flat discount caps itself: per-tx cap mirrors the Discount
                         // value read-only. Only %-type discounts get an inputtable cap.
                         if (block.id === 'discount' && field.key === 'discountPerTxCap' && rewardValues.discountType !== 'Percentage (%)') {

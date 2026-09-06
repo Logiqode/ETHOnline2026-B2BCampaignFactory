@@ -12,6 +12,9 @@ const ts = 1700003600 // in-window timestamp (day index 3 = Thursday)
 
 const base: OnChainCampaign = {
 	escrow: '0x0000000000000000000000000000000000000001',
+	rewardType: 'cashback',
+	mechanic: 'percent',
+	flatValue: 0,
 	rateBps: 1000, // 10%
 	start: 1700000000,
 	end: 1800000000,
@@ -122,5 +125,51 @@ describe('evaluate — combined constraints (tightest wins)', () => {
 		const c = { ...base, minSpendEnabled: true, minSpend: 10, capEnabled: true, cap: 15 }
 		// $200 spend: raw 20, remaining 15 → 15
 		expect(evaluate(req(200), c).points).toBe(15)
+	})
+})
+
+describe('evaluate — flat cashback mechanic', () => {
+	const flat = { ...base, mechanic: 'flat' as const, flatValue: 2 }
+
+	test('earns the fixed value regardless of spend size', () => {
+		expect(evaluate(req(12), flat).points).toBe(2) // NOT 10% × $12 = 1.2
+		expect(evaluate(req(90), flat).points).toBe(2) // NOT 10% × $90 = 9
+	})
+
+	test('min spend still gates flat earns', () => {
+		const gated = { ...flat, minSpendEnabled: true, minSpend: 20 }
+		expect(evaluate(req(19.99), gated).reason).toBe('below-min-spend')
+		expect(evaluate(req(20), gated).points).toBe(2)
+	})
+
+	test('cap clamps flat earns against remaining budget', () => {
+		const capped = { ...flat, capEnabled: true, cap: 5 }
+		expect(evaluate(req(100, ts, 4), capped).points).toBe(1)
+		expect(evaluate(req(100, ts, 5), capped).reason).toBe('cap-exhausted')
+	})
+})
+
+describe('evaluate — discount (proof-of-savings)', () => {
+	const discount = { ...base, rewardType: 'discount' as const, mechanic: 'flat' as const, flatValue: 5 }
+
+	test('computes dollars saved per purchase', () => {
+		const r = evaluate(req(30), discount)
+		expect(r.eligible).toBe(true)
+		expect(r.points).toBe(5) // $5 saved on a $30 purchase
+	})
+
+	test('same math on a small purchase (fixed saving)', () => {
+		expect(evaluate(req(12), discount).points).toBe(5)
+	})
+
+	test('percent discount computes saved percentage', () => {
+		const pct = { ...base, rewardType: 'discount' as const, mechanic: 'percent' as const, rateBps: 2000 } // 20% off
+		expect(evaluate(req(50), pct).points).toBe(10) // $10 saved on $50
+	})
+
+	test('cap clamps the saved amount the same way', () => {
+		const capped = { ...discount, capEnabled: true, cap: 30 }
+		expect(evaluate(req(30, ts, 28), capped).points).toBe(2)
+		expect(evaluate(req(30, ts, 30), capped).reason).toBe('cap-exhausted')
 	})
 })

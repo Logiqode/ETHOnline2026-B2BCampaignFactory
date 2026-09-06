@@ -58,28 +58,33 @@ export function validateLaunch(input: LaunchInput): { ok: true } | { ok: false; 
 // ─── Reward earn calculation (mirrors CampaignEscrow earn semantics) ─────────
 // Pure function so the wizard's cap logic is testable backend-side. A user's
 // earn on a single purchase is:
-//   1. rate% of the purchase
+//   1. the mechanic: flat (fixed per purchase) or rate% of the purchase
 //   2. capped per transaction when perTxCap is set
 //   3. capped cumulatively by the remaining per-user budget (per-user cap
 //      minus everything already earned)
 // Both caps are optional; caps never go negative, and 0 remaining budget means
-// the user earns nothing.
+// the user earns nothing. For discount campaigns the returned value is dollars
+// SAVED (the totalSaved counter) — same math, different meaning downstream.
 export interface EarnParams {
   purchaseAmount: number
-  rateBps: number // 0-10000 (cashbackRate% × 100)
+  rateBps: number // 0-10000 (cashbackRate% × 100); ignored when flatValue is set
+  flatValue?: number | null // fixed reward per qualifying purchase (flat mechanic)
   perTxCap?: number | null
   perUserCap?: number | null
   alreadyEarned?: number
 }
 
 export function calculateRewardEarn(p: EarnParams): number {
-  let earn = (p.purchaseAmount * p.rateBps) / 10_000
-  if (p.perTxCap != null) earn = Math.min(earn, p.perTxCap)
+  const earn = p.flatValue != null && p.flatValue > 0
+    ? p.flatValue
+    : (p.purchaseAmount * p.rateBps) / 10_000
+  let capped = earn
+  if (p.perTxCap != null) capped = Math.min(capped, p.perTxCap)
   if (p.perUserCap != null) {
     const remaining = Math.max(0, p.perUserCap - (p.alreadyEarned ?? 0))
-    earn = Math.min(earn, remaining)
+    capped = Math.min(capped, remaining)
   }
-  return Math.max(0, earn)
+  return Math.max(0, capped)
 }
 
 // ─── Salt generation ────────────────────────────────────────────────────────

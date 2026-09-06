@@ -23435,7 +23435,7 @@ function evaluate(request, campaign) {
       return { eligible: false, points: 0, reason: "not-allowed-day" };
     }
   }
-  const raw = campaign.rateBps / 1e4 * request.amountSpent;
+  const raw = campaign.mechanic === "flat" ? campaign.flatValue : campaign.rateBps / 1e4 * request.amountSpent;
   let points = raw;
   if (campaign.capEnabled) {
     const remaining = campaign.cap - (request.earnedInWindow ?? 0);
@@ -23486,7 +23486,10 @@ var ESCROW_TERMS_ABI = [
           { name: "capEnabled", type: "bool" },
           { name: "cap", type: "uint256" },
           { name: "dayOfWeekEnabled", type: "bool" },
-          { name: "daysOfWeek", type: "uint8" }
+          { name: "daysOfWeek", type: "uint8" },
+          { name: "flatEnabled", type: "bool" },
+          { name: "flatValue", type: "uint256" },
+          { name: "redeemable", type: "bool" }
         ]
       },
       { name: "platformFeeBps", type: "uint256" },
@@ -23528,11 +23531,24 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
   }).result();
   const terms = decodeCall(ESCROW_TERMS_ABI, "terms", termsReply.data);
   const [rateBps, tStart, tEnd, , , rawRules] = terms;
-  const rules = Array.isArray(rawRules) ? { minSpendEnabled: rawRules[0], minSpend: rawRules[1], capEnabled: rawRules[2], cap: rawRules[3], dayOfWeekEnabled: rawRules[4], daysOfWeek: rawRules[5] } : rawRules;
+  const rules = Array.isArray(rawRules) ? {
+    minSpendEnabled: rawRules[0],
+    minSpend: rawRules[1],
+    capEnabled: rawRules[2],
+    cap: rawRules[3],
+    dayOfWeekEnabled: rawRules[4],
+    daysOfWeek: rawRules[5],
+    flatEnabled: rawRules[6],
+    flatValue: rawRules[7],
+    redeemable: rawRules[8]
+  } : rawRules;
   const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules;
   const usd = (wei) => Number(wei) / 1000000000000000000;
   return {
     escrow: escrowAddr,
+    rewardType: rules.redeemable ? "cashback" : "discount",
+    mechanic: rules.flatEnabled ? "flat" : "percent",
+    flatValue: rules.flatEnabled ? usd(rules.flatValue) : 0,
     rateBps: Number(rateBps),
     start: Number(tStart),
     end: Number(tEnd),

@@ -122,11 +122,14 @@ export function evaluate(request: Request, campaign: EvalCampaign): { eligible: 
 			return { eligible: false, points: 0, reason: 'not-allowed-day' }
 		}
 	}
-	// 3b. Cashback = rate% of spend, clamped at cap - earnedInWindow (the caller
-	// computes the window; the escrow re-verifies on-chain). Tightest wins —
-	// mirrors backend calculateRewardEarn. capEnabled=false means no cap:
-	// `cap` is 0 on-chain and the clamp must be skipped, not applied as 0.
-	const raw = (campaign.rateBps / 10_000) * request.amountSpent
+	// 3b. Reward mechanic: percent (rateBps% of spend) or flat (fixed value per
+	// purchase). For discount campaigns (rewardType 'discount') the computed
+	// value is dollars SAVED — it accumulates in the user's totalSaved counter
+	// on-chain, never in a spendable balance. Tightest wins — mirrors backend
+	// calculateRewardEarn and CampaignRulesLib.computePoints. capEnabled=false
+	// means no cap: `cap` is 0 on-chain and the clamp must be skipped, not
+	// applied as 0.
+	const raw = campaign.mechanic === 'flat' ? campaign.flatValue : (campaign.rateBps / 10_000) * request.amountSpent
 	let points = raw
 	if (campaign.capEnabled) {
 		const remaining = campaign.cap - (request.earnedInWindow ?? 0)
@@ -186,6 +189,9 @@ const ESCROW_TERMS_ABI = [
 					{ name: 'cap', type: 'uint256' },
 					{ name: 'dayOfWeekEnabled', type: 'bool' },
 					{ name: 'daysOfWeek', type: 'uint8' },
+					{ name: 'flatEnabled', type: 'bool' },
+					{ name: 'flatValue', type: 'uint256' },
+					{ name: 'redeemable', type: 'bool' },
 				],
 			},
 			{ name: 'platformFeeBps', type: 'uint256' },
@@ -196,6 +202,9 @@ const ESCROW_TERMS_ABI = [
 
 interface OnChainCampaign {
 	escrow: string
+	rewardType: 'cashback' | 'discount' // redeemable=false → discount proof-of-savings
+	mechanic: 'percent' | 'flat'
+	flatValue: number // reward units per qualifying purchase (flat mechanic)
 	rateBps: number
 	start: number
 	end: number
@@ -255,17 +264,39 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 	type TermsTuple = readonly [bigint, bigint, bigint, string, bigint, unknown, bigint, string]
 	const terms = decodeCall<TermsTuple>(ESCROW_TERMS_ABI, 'terms', termsReply.data)
 	const [rateBps, tStart, tEnd, , , rawRules] = terms
-	type RulesShape = { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number }
+	type RulesShape = {
+		minSpendEnabled: boolean
+		minSpend: bigint
+		capEnabled: boolean
+		cap: bigint
+		dayOfWeekEnabled: boolean
+		daysOfWeek: number
+		flatEnabled: boolean
+		flatValue: bigint
+		redeemable: boolean
+	}
 	const rules: RulesShape = Array.isArray(rawRules)
-		? { minSpendEnabled: rawRules[0] as boolean, minSpend: rawRules[1] as bigint, capEnabled: rawRules[2] as boolean, cap: rawRules[3] as bigint, dayOfWeekEnabled: rawRules[4] as boolean, daysOfWeek: rawRules[5] as number }
+		? {
+				minSpendEnabled: rawRules[0] as boolean,
+				minSpend: rawRules[1] as bigint,
+				capEnabled: rawRules[2] as boolean,
+				cap: rawRules[3] as bigint,
+				dayOfWeekEnabled: rawRules[4] as boolean,
+				daysOfWeek: rawRules[5] as number,
+				flatEnabled: rawRules[6] as boolean,
+				flatValue: rawRules[7] as bigint,
+				redeemable: rawRules[8] as boolean,
+			}
 		: (rawRules as RulesShape)
 	const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules
 
-
-	// 18-decimal USD values → plain numbers for evaluation.
+	// 18-decimal USD/reward values → plain numbers for evaluation.
 	const usd = (wei: bigint) => Number(wei) / 1e18
 	return {
 		escrow: escrowAddr,
+		rewardType: rules.redeemable ? 'cashback' : 'discount',
+		mechanic: rules.flatEnabled ? 'flat' : 'percent',
+		flatValue: rules.flatEnabled ? usd(rules.flatValue) : 0,
 		rateBps: Number(rateBps),
 		start: Number(tStart),
 		end: Number(tEnd),

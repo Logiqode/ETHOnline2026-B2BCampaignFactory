@@ -171,7 +171,16 @@ campaigns.post('/:id/launch', async (c) => {
   const capEnabled = rs['reward-cap'] === 'enabled'
   const dowEnabled = rs['day-of-week'] === 'enabled'
   const daysMask = dowEnabled ? 127 : 0 // every day allowed when the rule is on with no selection
-  const rateBps = mechanics?.rewardType === 'monetary' ? Math.round(Number(rv.cashbackRate ?? 0) * 100) : 0
+
+  // ── Reward mechanic mapping (mirrors CampaignRulesLib.computePoints) ──────
+  // 'monetary' = cashback: percent (rateBps% of spend) or flat (fixed per
+  // purchase). 'discount' = proof-of-savings: redeemable=false, the computed
+  // value is dollars saved — it lands in the user's totalSaved counter only.
+  const cashbackType = String(rv.cashbackType ?? 'percent')
+  const flatEnabled = mechanics?.rewardType === 'monetary' && cashbackType === 'flat'
+  const rateBps = flatEnabled ? 0 : Math.round(Number(rv.cashbackRate ?? 0) * 100)
+  const flatValueWei = flatEnabled ? usdToWei(Number(rv.cashbackFlat ?? 0)) : 0n
+  const redeemable = mechanics?.rewardType !== 'discount'
 
   let onchain
   try {
@@ -186,6 +195,9 @@ campaigns.post('/:id/launch', async (c) => {
         capWei: usdToWei(Number(rvals.cap ?? 0)),
         dayOfWeekEnabled: dowEnabled,
         daysOfWeekBitmask: daysMask,
+        flatEnabled,
+        flatValueWei,
+        redeemable,
       },
       workflowOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
       rewardUri: process.env.REWARD_URI || 'https://wizard.example/api/metadata/{id}.json',

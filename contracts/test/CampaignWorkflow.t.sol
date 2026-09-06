@@ -48,7 +48,10 @@ contract CampaignWorkflowTest is Test {
                 capEnabled: true,
                 cap: CAP,
                 dayOfWeekEnabled: false,
-                daysOfWeek: 0
+                daysOfWeek: 0,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: true
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -330,13 +333,49 @@ contract CampaignWorkflowTest is Test {
                 capEnabled: capOn,
                 cap: cap,
                 dayOfWeekEnabled: dayOn,
-                daysOfWeek: daysOfWeek
+                daysOfWeek: daysOfWeek,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: true
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
         });
         uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encodePacked(minSpendOn, capOn, dayOn, start, end, block.timestamp)));
         (esc, , , , ) = factory.campaigns(id);
+    }
+
+    /// @notice Deploy a campaign with the given reward mechanics (flat / redeemable mix).
+    ///         Returns the escrow, its paired reward contract, and the reward tokenId.
+    function _deployWithMechanics(
+        bool flatOn,
+        uint256 flatValue,
+        bool redeemable,
+        uint64 start,
+        uint64 end
+    ) internal returns (address esc, address reward_, uint256 tokenId_) {
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: false,
+                minSpend: 0,
+                capEnabled: false,
+                cap: 0,
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0,
+                flatEnabled: flatOn,
+                flatValue: flatValue,
+                redeemable: redeemable
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encodePacked(flatOn, flatValue, redeemable, start, end, block.timestamp)));
+        (esc, reward_, tokenId_, , ) = factory.campaigns(id);
     }
 
     /// @notice 1. MIN-SPEND ONLY — below-min reverts; at/above min mints.
@@ -519,6 +558,110 @@ contract CampaignWorkflowTest is Test {
         assertEq(CampaignEscrow(escA).lifetimeEarned(customer), 2e18, "A independent");
         assertEq(CampaignEscrow(escB).lifetimeEarned(customer), 20e18, "B independent (capped)");
         assertEq(CampaignEscrow(escC).lifetimeEarned(customer), 1.2e18, "C independent");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+              REWARD MECHANICS — flat cashback & discount proof-of-savings
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice FLAT CASHBACK — every qualifying purchase earns the same fixed
+    ///         amount regardless of spend size (vs percent cashback).
+    function test_FlatCashbackFixedPerPurchase() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        (address esc, address reward_, uint256 tokenId_) = _deployWithMechanics(true, 2e18, true, start, end); // $2 per purchase
+
+        vm.startPrank(workflowOwner);
+        // $12 purchase → flat $2 (NOT 10% × $12 = $1.20)
+        uint256 p1 = CampaignEscrow(esc).claim(keccak256("f-1"), customer, 12e18);
+        assertEq(p1, 2e18, "flat: $12 purchase earns the fixed $2");
+        // $90 purchase → still exactly $2 (a percent campaign would pay $9)
+        uint256 p2 = CampaignEscrow(esc).claim(keccak256("f-2"), customer, 90e18);
+        assertEq(p2, 2e18, "flat: spend size does not change the earn");
+        vm.stopPrank();
+
+        // Full UTXO ledger: spendable at a POS like percent cashback
+        assertEq(CampaignEscrow(esc).availableBalance(customer), 4e18, "flat: unspent accumulates");
+        assertEq(CampaignEscrow(esc).lifetimeEarned(customer), 4e18, "flat: lineage accumulates");
+        assertEq(CampaignReward(reward_).balanceOf(customer, tokenId_), 4e18, "flat: tokens minted");
+    }
+
+    /// @notice FLAT CASHBACK — flatValue must be 2-decimal clean at init.
+    function test_FlatValueRejectsTooManyDecimals() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        // $2.005 per purchase — 3 decimals — must revert at initialize (via factory)
+        vm.expectRevert(); // CampaignEscrow__TooManyDecimals
+        _deployWithMechanics(true, 2.005e18, true, start, end);
+    }
+
+    /// @notice FLAT CASHBACK — flatValue 0 reverts at init.
+    function test_FlatValueZeroReverts() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        vm.expectRevert(); // CampaignEscrow__ZeroPoints
+        _deployWithMechanics(true, 0, true, start, end);
+    }
+
+    /// @notice DISCOUNT — proof-of-savings: totalBalance accumulates (the user's
+    ///         totalSaved counter), unspentBalance stays 0, NO tokens minted, and
+    ///         redemption is impossible at any POS (nothing to spend).
+    function test_DiscountTracksTotalSavedNotSpendable() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        (address esc, address reward_, uint256 tokenId_) = _deployWithMechanics(true, 5e18, false, start, end); // $5-off voucher
+
+        vm.startPrank(workflowOwner);
+        uint256 p1 = CampaignEscrow(esc).claim(keccak256("d-1"), customer, 30e18);
+        assertEq(p1, 5e18, "discount: $5 saved on a $30 purchase");
+        uint256 p2 = CampaignEscrow(esc).claim(keccak256("d-2"), customer, 12e18);
+        assertEq(p2, 5e18, "discount: fixed saving regardless of spend");
+        vm.stopPrank();
+
+        // The counter IS the product: totalSaved grows, unspent never does.
+        assertEq(CampaignEscrow(esc).lifetimeEarned(customer), 10e18, "discount: totalSaved = $10");
+        assertEq(CampaignEscrow(esc).availableBalance(customer), 0, "discount: unspent stays 0 - nothing redeemable");
+
+        // No ERC-1155 minted for a non-redeemable campaign.
+        assertEq(CampaignReward(reward_).balanceOf(customer, tokenId_), 0, "discount: no tokens minted");
+
+        // Redemption is structurally impossible (insufficient balance, always).
+        vm.prank(address(factory));
+        CampaignEscrow(esc).setRedeemer(brandB, true);
+        vm.prank(brandB);
+        vm.expectRevert(); // CampaignEscrow__InsufficientBalance
+        CampaignEscrow(esc).redeemFor(customer, 1e18);
+    }
+
+    /// @notice DISCOUNT via the CRE report path — points re-verification must accept
+    ///         the flat mechanic and the ledger must stay proof-of-savings.
+    function test_DiscountOnReportPath() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        (address esc, , ) = _deployWithMechanics(true, 5e18, false, start, end);
+
+        // computePointsPreview must mirror the flat mechanic off-chain too.
+        uint256 expected = CampaignEscrow(esc).computePointsPreview(30e18, 0);
+        assertEq(expected, 5e18, "discount: preview uses flatValue");
+
+        bytes32 nf = keccak256("d-report-1");
+        vm.prank(CRE_FORWARDER);
+        CampaignEscrow(esc).onReport(_metadata(workflowOwner), _report(nf, customer, 30e18, true, expected));
+
+        assertEq(CampaignEscrow(esc).lifetimeEarned(customer), 5e18, "discount: totalSaved via report");
+        assertEq(CampaignEscrow(esc).availableBalance(customer), 0, "discount: still nothing spendable");
+        assertTrue(CampaignEscrow(esc).usedNullifiers(nf), "discount: nullifier consumed");
+    }
+
+    /// @notice PERCENT cashback remains the default when flatEnabled is false
+    ///         (regression guard for the mechanic switch).
+    function test_PercentCashbackStillDefault() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        (address esc, , ) = _deployWithMechanics(false, 0, true, start, end);
+        vm.prank(workflowOwner);
+        uint256 p = CampaignEscrow(esc).claim(keccak256("pc-1"), customer, 20e18);
+        assertEq(p, 2e18, "percent default: 10% of $20 = $2");
     }
 
     /*//////////////////////////////////////////////////////////////
