@@ -75,8 +75,9 @@ type Campaign = z.infer<typeof campaignSchema>
 // so new campaigns work with zero workflow redeploys. Only public plumbing
 // lives in config.
 export const configSchema = z.object({
-	chainName: z.string(),      // e.g. 'ethereum-testnet-sepolia-base-1'
-	factoryAddress: z.string(), // deployed CampaignFactory on the target chain
+	chainName: z.string(),        // e.g. 'ethereum-testnet-sepolia-base-1'
+	factoryAddress: z.string(),   // deployed CampaignFactory on the target chain
+	workflowOwnerAddress: z.string().regex(/^0x[0-9a-fA-F]{40}$/), // workflow-owner EOA (public; goes into report metadata)
 })
 export type Config = z.infer<typeof configSchema>
 
@@ -236,33 +237,44 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: cfg.factoryAddress as `0x${string}`, data: callData }),
 		})
 		.result()
-	const info = decodeCall<{ escrow: string; reward: string; rewardTokenId: bigint; start: bigint; end: bigint }>(FACTORY_ABI, 'campaigns', reply.data)
-	if (info.escrow === '0x0000000000000000000000000000000000000000') {
+	const info = decodeCall<readonly [string, string, bigint, bigint, bigint]>(FACTORY_ABI, 'campaigns', reply.data)
+	const [escrowAddr] = info
+	if (escrowAddr === '0x0000000000000000000000000000000000000000') {
 		throw new Error(`Unknown campaignId: ${campaignId}`)
 	}
 
 	const termsData = encodeFunctionData({ abi: ESCROW_TERMS_ABI, functionName: 'terms', args: [] })
 	const termsReply = evmClient
 		.callContract(donRuntimeOf(runtime), {
-			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: info.escrow as `0x${string}`, data: termsData }),
+			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: escrowAddr as `0x${string}`, data: termsData }),
 		})
 		.result()
-	type Terms = { rateBps: bigint; start: bigint; end: bigint; rules: { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number } }
-	const terms = decodeCall<Terms>(ESCROW_TERMS_ABI, 'terms', termsReply.data)
+	// viem quirk: top-level outputs decode as a plain array, but a NESTED named
+	// tuple (rules) decodes as a named object — so normalize the shape instead
+	// of assuming one (a wrong assumption throws "value is not iterable").
+	type TermsTuple = readonly [bigint, bigint, bigint, string, bigint, unknown, bigint, string]
+	const terms = decodeCall<TermsTuple>(ESCROW_TERMS_ABI, 'terms', termsReply.data)
+	const [rateBps, tStart, tEnd, , , rawRules] = terms
+	type RulesShape = { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number }
+	const rules: RulesShape = Array.isArray(rawRules)
+		? { minSpendEnabled: rawRules[0] as boolean, minSpend: rawRules[1] as bigint, capEnabled: rawRules[2] as boolean, cap: rawRules[3] as bigint, dayOfWeekEnabled: rawRules[4] as boolean, daysOfWeek: rawRules[5] as number }
+		: (rawRules as RulesShape)
+	const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules
+
 
 	// 18-decimal USD values → plain numbers for evaluation.
 	const usd = (wei: bigint) => Number(wei) / 1e18
 	return {
-		escrow: info.escrow,
-		rateBps: Number(terms.rateBps),
-		start: Number(terms.start),
-		end: Number(terms.end),
-		minSpend: terms.rules.minSpendEnabled ? usd(terms.rules.minSpend) : 0,
-		cap: terms.rules.capEnabled ? usd(terms.rules.cap) : 0,
-		minSpendEnabled: terms.rules.minSpendEnabled,
-		capEnabled: terms.rules.capEnabled,
-		dayOfWeekEnabled: terms.rules.dayOfWeekEnabled,
-		daysOfWeek: terms.rules.daysOfWeek,
+		escrow: escrowAddr,
+		rateBps: Number(rateBps),
+		start: Number(tStart),
+		end: Number(tEnd),
+		minSpend: minSpendOn ? usd(minSpendWei) : 0,
+		cap: capOn ? usd(capWei) : 0,
+		minSpendEnabled: minSpendOn,
+		capEnabled: capOn,
+		dayOfWeekEnabled: dowOn,
+		daysOfWeek: dowMask,
 	}
 }
 
@@ -322,7 +334,7 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 		parseAbiParameters('bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei'),
 		[nullifier, request.userAnchor as `0x${string}`, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
 	)
-	const workflowOwner = getWorkflowOwnerAddress()
+	const workflowOwner = getWorkflowOwnerAddress(config)
 	const metadata = encodeAbiParameters(
 		parseAbiParameters('bytes32 workflowId'),
 		[WORKFLOW_ID],
@@ -377,10 +389,10 @@ function workflowName10(owner: string): `0x${string}` {
 	return (`0x${name}${ownerPacked}`) as `0x${string}`
 }
 
-function getWorkflowOwnerAddress(): string {
+function getWorkflowOwnerAddress(config: Config): string {
 	// The workflow-owner EOA is public config (project.yaml account address);
 	// in the demo it's the platform wallet that launched the campaigns.
-	return process.env.WORKFLOW_OWNER_ADDRESS || '0x9587BD3e8195D597BF4e82B18724178e52B55c4F'
+	return config.workflowOwnerAddress
 }
 
 const ESCROW_ONREPORT_ABI = [

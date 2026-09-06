@@ -1,0 +1,9 @@
+{
+  "campaignId": 2,
+  "userAnchor": "0xAAAA000000000000000000000000000000000006",
+  "merchantId": "burgera",
+  "amountSpent": 40,
+  "timestamp": 1789000000,
+  "earnedInWindow": 0,
+  "items": ["fries"]
+}

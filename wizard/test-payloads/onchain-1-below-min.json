@@ -1,0 +1,9 @@
+{
+  "campaignId": 1,
+  "userAnchor": "0xaaAa000000000000000000000000000000000002",
+  "merchantId": "burgera",
+  "amountSpent": 9,
+  "timestamp": 1789000000,
+  "earnedInWindow": 0,
+  "items": ["burger"]
+}

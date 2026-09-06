@@ -1,4 +1,5 @@
 {
 	"chainName": "ethereum-testnet-sepolia-base-1",
-	"factoryAddress": "0xa9198fD3D9e48Ee8cDc7e70AC6F1BE9547De517F"
+	"factoryAddress": "0x5B8feadcAD428194d76aF8b713D912d44cfFA2CF",
+	"workflowOwnerAddress": "0x9587BD3e8195D597BF4e82B18724178e52B55c4F"
 }

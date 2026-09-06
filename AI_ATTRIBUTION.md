@@ -1,5 +1,6 @@
 LLMs used:
 GLM 5.3 Flash
+muse-spark-1.3-contributor
 DeepSeek V4 Flash 0731
 
 

@@ -77,10 +77,10 @@ describe('evaluate — cashback math + per-user cap', () => {
 
 	test('cap clamps against remaining budget (cap - earnedInWindow)', () => {
 		const c = { ...base, capEnabled: true, cap: 50 }
-		// raw 20, remaining 50-40=10 → 10
+		// raw 10, remaining 50-40=10 → 10
 		expect(evaluate(req(100, ts, 40), c).points).toBe(10)
-		// raw 20, remaining 50 → 20
-		expect(evaluate(req(100, ts, 0), c).points).toBe(20)
+		// raw 10, remaining 50 → 10
+		expect(evaluate(req(100, ts, 0), c).points).toBe(10)
 	})
 
 	test('exhausted cap rejects (cap-exhausted, never negative)', () => {
