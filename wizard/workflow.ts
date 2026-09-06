@@ -24,6 +24,7 @@ const cashbackSchema = z.object({
 	minSpend: z.number().nonnegative().default(0),
 	rateBps: z.number().int().positive(),    // e.g. 2000 = 20%
 	cap: z.number().nonnegative(),           // per-user cap in reward units
+	perTxCap: z.number().nonnegative().optional(), // per-transaction cap (points); absent = uncapped
 	capPeriod: z.enum(['Lifetime', 'Year', 'Month', 'Week', 'Day']).default('Lifetime'),
 	capPeriodCount: z.number().int().positive().default(1),
 	capResetBasis: z.enum(['Rolling', 'Calendar']).default('Rolling'),
@@ -43,6 +44,7 @@ const discountSchema = z.object({
 	minSpend: z.number().nonnegative().default(0),
 	discountType: z.enum(['percent', 'fixed']),
 	discountValue: z.number().nonnegative(),
+	perTxCap: z.number().nonnegative().optional(), // per-transaction cap (USD); absent = uncapped
 	start: z.number().int().nonnegative(),
 	end: z.number().int().nonnegative(),
 	escrow: z.string(),
@@ -105,7 +107,12 @@ function evaluate(request: Request, campaign: Campaign): { eligible: boolean; po
 			campaign.discountType === 'percent'
 				? (campaign.discountValue / 100) * request.amountSpent
 				: campaign.discountValue
-		return { eligible: true, points: discount, reason: 'ok' }
+		// Per-transaction cap (USD): flat discounts cap at their own value; %
+		// discounts use the configured cap. Absent = uncapped. Tightest wins.
+		let capped = discount
+		if (campaign.perTxCap !== undefined) capped = Math.min(capped, campaign.perTxCap)
+		if (campaign.discountType === 'fixed') capped = Math.min(capped, campaign.discountValue)
+		return { eligible: true, points: capped, reason: 'ok' }
 	}
 
 	if (campaign.rewardType === 'digital') {
@@ -123,10 +130,13 @@ function evaluate(request: Request, campaign: Campaign): { eligible: boolean; po
 			return { eligible: false, points: 0, reason: 'not-allowed-day' }
 		}
 	}
-	// 3b. Cashback = rate% of spend, clamped at cap - earnedInWindow.
+	// 3b. Cashback = rate% of spend, capped per-tx, then clamped at cap - earnedInWindow.
+	// Tightest constraint wins (mirrors backend calculateRewardEarn).
 	const raw = (campaign.rateBps / 10_000) * request.amountSpent
+	let points = raw
+	if (campaign.perTxCap !== undefined) points = Math.min(points, campaign.perTxCap)
 	const remaining = campaign.cap - (request.earnedInWindow ?? 0)
-	const points = Math.min(raw, Math.max(remaining, 0))
+	points = Math.min(points, Math.max(remaining, 0))
 	if (points <= 0) {
 		return { eligible: false, points: 0, reason: 'cap-exhausted' }
 	}

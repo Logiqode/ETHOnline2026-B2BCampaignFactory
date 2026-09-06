@@ -17,7 +17,7 @@ import {
 
 // ─── Campaign Description (name + brands) ──────────────────────
 const DEFAULT_DESCRIPTION: { campaignName: string; participants: BrandParticipant[] } = {
-  campaignName: 'Acme Coffee × Globex Books',
+  campaignName: 'Acme Coffee x Globex Books',
   participants: [
     { name: BRANDS[0], role: 'pos' as BrandRole },
     { name: BRANDS[1], role: 'reward' as BrandRole },

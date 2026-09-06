@@ -55,14 +55,14 @@ contract CampaignWorkflowTest is Test {
         });
     }
 
-    // Convenience wrapper for the new createCampaign signature (payable, fee split, salt).
+    // Convenience wrapper for the new createCampaign signature (non-payable, fee split, salt).
     function _createCampaign(
         CampaignEscrow.CampaignTerms memory terms,
         address workflowOwner_,
         string memory rewardUri,
         bytes32 salt
     ) internal returns (uint256 id) {
-        id = factory.createCampaign{value: factory.MIN_OPERATING_DEPOSIT()}(
+        id = factory.createCampaign(
             terms,
             workflowOwner_,
             rewardUri,
@@ -532,14 +532,16 @@ contract CampaignWorkflowTest is Test {
         assertEq(factory.predictEscrowAddress(keccak256("salt-1")), escrowAddr, "predicted == deployed");
     }
 
-    /// @notice Operating deposit is split per the fee-split parameter.
-    function test_OperatingDepositSplit() public {
+    /// @notice Operating deposit is recorded as owed per the fee-split parameter:
+    /// A owes feeSplitBps% of MIN_OPERATING_DEPOSIT, B the complement — both to
+    /// the platform reserves. No ETH moves at launch (settled off-chain).
+    function test_OperatingDepositOwedRecords() public {
         address a = address(0x1111);
         address b = address(0x2222);
-        uint256 deposit = 1 ether;
-        // 25% A / 75% B of 1 ether
-        vm.deal(address(this), deposit);
-        uint256 id = factory.createCampaign{value: deposit}(
+        uint256 balABefore = a.balance;
+        uint256 balBBefore = b.balance;
+        uint256 factoryBefore = address(factory).balance;
+        uint256 id = factory.createCampaign(
             _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
             workflowOwner,
             "https://example.com/metadata/{id}.json",
@@ -548,33 +550,25 @@ contract CampaignWorkflowTest is Test {
             b,
             2500
         );
-        assertEq(a.balance, 0.25 ether, "A got 25%");
-        assertEq(b.balance, 0.75 ether, "B got 75%");
+        // 25% A / 75% B of the 0.01 ether deposit is recorded as OWED via the
+        // OperatingDeposit event; assert no ETH moved on-chain.
+        assertEq(a.balance, balABefore, "A pays nothing on-chain at launch");
+        assertEq(b.balance, balBBefore, "B pays nothing on-chain at launch");
+        assertEq(address(factory).balance, factoryBefore, "factory custodies no ETH");
     }
 
-    /// @notice Launch reverts if the operating deposit is below the minimum.
-    function test_DepositBelowMinimumReverts() public {
-        vm.expectRevert(); // CampaignFactory__DepositRequired
-        factory.createCampaign{value: 0}(
-            _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
-            workflowOwner,
-            "https://example.com/metadata/{id}.json",
-            keccak256("salt-low"),
-            COMPANY_A,
-            COMPANY_B,
-            FEE_SPLIT_BPS
-        );
-    }
+    /// @notice Launch no longer takes an on-chain deposit — createCampaign is
+    /// non-payable (Solidity enforces this at compile time; sending ETH is a
+    /// type error in tests and reverts at runtime for external callers).
 
     /// @notice Launch reverts on an invalid fee split (> 10000 bps).
     function test_InvalidFeeSplitReverts() public {
-        uint256 deposit = factory.MIN_OPERATING_DEPOSIT(); // hoist so expectRevert sees the NEXT call
         vm.expectRevert(); // CampaignFactory__InvalidFeeSplit
-        factory.createCampaign{value: deposit}(
+        factory.createCampaign(
             _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
             workflowOwner,
             "https://example.com/metadata/{id}.json",
-            keccak256("salt-fee"),
+            keccak256("salt-fee-split"),
             COMPANY_A,
             COMPANY_B,
             10_001

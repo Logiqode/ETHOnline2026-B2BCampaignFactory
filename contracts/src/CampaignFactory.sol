@@ -63,8 +63,10 @@ contract CampaignFactory {
     /// @notice Per-campaign reward tokenId range — each campaign gets its own id.
     uint256 public constant REWARD_TOKEN_RANGE = 1_000_000;
 
-    /// @notice Minimum launch-time operating deposit (18-decimals, e.g. $100 worth).
-    ///         In the demo this is a small mock amount; real gas/fees are deferred.
+    /// @notice Launch-time operating deposit each company owes the platform
+    ///         reserves (18-decimals). A owes feeSplitBps% of this, B the rest.
+    ///         Demo: recorded via the OperatingDeposit event, settled off-chain;
+    ///         the platform wallet (not the companies) pays campaign gas.
     uint256 public constant MIN_OPERATING_DEPOSIT = 0.01 ether;
 
     /*//////////////////////////////////////////////////////////////
@@ -98,11 +100,10 @@ contract CampaignFactory {
         address companyA_,
         address companyB_,
         uint256 feeSplitBps_
-    ) external payable returns (uint256 campaignId) {
+    ) external returns (uint256 campaignId) {
         if (bytes(rewardUri_).length == 0) revert CampaignFactory__InvalidUri();
         if (feeSplitBps_ > 10_000) revert CampaignFactory__InvalidFeeSplit(feeSplitBps_);
         if (companyA_ == address(0) || companyB_ == address(0)) revert CampaignFactory__InvalidFeeAccount(companyA_ == address(0) ? companyA_ : companyB_);
-        if (msg.value < MIN_OPERATING_DEPOSIT) revert CampaignFactory__DepositRequired(MIN_OPERATING_DEPOSIT, msg.value);
 
         campaignId = nextCampaignId++;
         uint256 tokenId = campaignId * REWARD_TOKEN_RANGE; // tokenId 0 reserved
@@ -126,8 +127,10 @@ contract CampaignFactory {
             end: terms_.end
         });
 
-        // Split the operating deposit between the two brands' fee accounts.
-        _splitDeposit(campaignId, msg.value, companyA_, companyB_, feeSplitBps_);
+        // Record the operating deposit each company OWES the platform reserves
+        // (feeSplitBps% to A, the complement to B). No ETH moves at launch —
+        // the platform wallet pays campaign gas; deposits are settled off-chain.
+        _recordDeposit(campaignId, companyA_, companyB_, feeSplitBps_);
 
         emit CampaignCreated(campaignId, escrow, address(reward));
     }
@@ -141,23 +144,18 @@ contract CampaignFactory {
                                INTERNAL
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Forward the launch deposit to the two brand fee accounts per the fee split.
-    function _splitDeposit(
+    /// @dev Record the operating deposit owed BY each company TO the platform
+    /// reserves: feeSplitBps% of MIN_OPERATING_DEPOSIT by A, complement by B.
+    /// Demo semantics — no ETH transfer happens; the platform wallet funds gas.
+    function _recordDeposit(
         uint256 campaignId,
-        uint256 total,
         address companyA,
         address companyB,
         uint256 feeSplitBps
     ) internal {
-        uint256 companyAShare = (total * feeSplitBps) / 10_000;
-        uint256 companyBShare = total - companyAShare;
-        bool okA = true;
-        bool okB = true;
-        if (companyAShare > 0) (okA, ) = companyA.call{value: companyAShare}("");
-        if (companyBShare > 0) (okB, ) = companyB.call{value: companyBShare}("");
-        // Swallowing transfer failure is acceptable for the demo (mock split); a
-        // production contract would revert and treat this as part of a guarded launch.
-        okA; okB;
-        emit OperatingDeposit(campaignId, total, companyA, companyB, companyAShare, companyBShare, feeSplitBps);
+        uint256 total = MIN_OPERATING_DEPOSIT;
+        uint256 companyAOwes = (total * feeSplitBps) / 10_000;
+        uint256 companyBOwes = total - companyAOwes;
+        emit OperatingDeposit(campaignId, total, companyA, companyB, companyAOwes, companyBOwes, feeSplitBps);
     }
 }

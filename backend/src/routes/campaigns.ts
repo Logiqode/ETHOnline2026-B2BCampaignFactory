@@ -9,6 +9,8 @@ import {
   validateLaunch,
   type CampaignRow,
 } from '../lib/launch'
+import { createCampaignOnChain, loadDeployment, usdToWei } from '../lib/onchain'
+import type { Address, Hex } from 'viem'
 
 export const campaigns = new Hono()
 
@@ -132,6 +134,12 @@ campaigns.post('/:id/launch', async (c) => {
   }
 
   const row = existing[0]
+  let deployment: Awaited<ReturnType<typeof loadDeployment>>
+  try {
+    deployment = await loadDeployment()
+  } catch (err) {
+    return c.json({ error: `Deployment config unavailable: ${(err as Error).message}` }, 503)
+  }
   const validation = validateLaunch({
     feeSplitBps: row.fee_split_bps,
     companyA: row.company_a,
@@ -143,10 +151,59 @@ campaigns.post('/:id/launch', async (c) => {
   }
 
   const salt = generateSalt()
+
+  // ── On-chain createCampaign: real deployment to Base Sepolia ──────────────
+  // Terms from the wizard's JSONB record; rewardUri points at the (future)
+  // metadata endpoint — the reward contract's ERC-1155 base URI template.
+  const mechanics = row.mechanics as { rewardType?: string; rewardValues?: Record<string, string | number | boolean> }
+  const rv = mechanics?.rewardValues ?? {}
+  const rules = row.rules as { ruleStates?: Record<string, string>; ruleValues?: Record<string, string | number> }
+  const rs = rules?.ruleStates ?? {}
+  const rvals = rules?.ruleValues ?? {}
+  const t = row.terms as { start?: string; end?: string; noEndDate?: boolean }
+
+  const startUnix = t?.start ? Math.floor(new Date(t.start).getTime() / 1000) : 0
+  // "No end date" maps to a far-future end (the wizard uses 7026-12-31 for this).
+  const endUnix = t?.noEndDate || !t?.end
+    ? 4102444800 // 2100-01-01
+    : Math.floor(new Date(t.end).getTime() / 1000)
+  const minSpendEnabled = rs['min-spend'] === 'enabled'
+  const capEnabled = rs['reward-cap'] === 'enabled'
+  const dowEnabled = rs['day-of-week'] === 'enabled'
+  const daysMask = dowEnabled ? 127 : 0 // every day allowed when the rule is on with no selection
+  const rateBps = mechanics?.rewardType === 'monetary' ? Math.round(Number(rv.cashbackRate ?? 0) * 100) : 0
+
+  let onchain
+  try {
+    onchain = await createCampaignOnChain({
+      terms: {
+        rateBps,
+        startUnix,
+        endUnix,
+        minSpendEnabled,
+        minSpendWei: usdToWei(Number(rvals.minSpend ?? 0)),
+        capEnabled,
+        capWei: usdToWei(Number(rvals.cap ?? 0)),
+        dayOfWeekEnabled: dowEnabled,
+        daysOfWeekBitmask: daysMask,
+      },
+      workflowOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
+      rewardUri: process.env.REWARD_URI || 'https://wizard.example/api/metadata/{id}.json',
+      salt: salt as Hex,
+      companyA: row.company_a as Address,
+      companyB: row.company_b as Address,
+      feeSplitBps: row.fee_split_bps,
+    })
+  } catch (err) {
+    return c.json({ error: `On-chain launch failed: ${(err as Error).message}` }, 502)
+  }
+
   const rows = await sql<CampaignRow[]>`
-    UPDATE campaigns SET status = 'launched', salt = ${salt}, launched_at = NOW()
+    UPDATE campaigns SET
+      status = 'launched', salt = ${salt}, launched_at = NOW(),
+      escrow_address = ${onchain.escrow}, reward_address = ${onchain.reward}
     WHERE id = ${id}
     RETURNING *
   `
-  return c.json(toApi(rows[0]))
+  return c.json({ ...toApi(rows[0]), onchainTxHash: onchain.txHash, onchainCampaignId: onchain.campaignId })
 })

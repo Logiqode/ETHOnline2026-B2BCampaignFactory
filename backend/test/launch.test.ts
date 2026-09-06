@@ -28,8 +28,12 @@ describe('validateLaunch (mirrors CampaignFactory.createCampaign)', () => {
     expect(validateLaunch({ feeSplitBps: 5000, companyA: A, companyB: ZERO }).ok).toBe(false)
   })
 
-  test('deposit below the minimum is rejected', () => {
+  test('deposit below the required amount is rejected', () => {
     expect(validateLaunch({ feeSplitBps: 5000, companyA: A, companyB: B, operatingDepositWei: MIN_OPERATING_WEI - 1n }).ok).toBe(false)
+  })
+
+  test('deposit above the required amount is rejected (owed amount is exact, not >=)', () => {
+    expect(validateLaunch({ feeSplitBps: 5000, companyA: A, companyB: B, operatingDepositWei: MIN_OPERATING_WEI * 2n }).ok).toBe(false)
   })
 
   test('defaults to the minimum deposit when not provided', () => {

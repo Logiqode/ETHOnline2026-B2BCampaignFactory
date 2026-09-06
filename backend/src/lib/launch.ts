@@ -49,8 +49,8 @@ export function validateLaunch(input: LaunchInput): { ok: true } | { ok: false; 
     return { ok: false, error: 'InvalidFeeAccount: company A and B fee accounts must be non-zero' }
   }
   const depositWei = input.operatingDepositWei ?? MIN_OPERATING_WEI
-  if (depositWei < MIN_OPERATING_WEI) {
-    return { ok: false, error: `DepositRequired: need >= ${MIN_OPERATING_DEPOSIT} ETH, got ${Number(depositWei) / 1e18}` }
+  if (depositWei !== MIN_OPERATING_WEI) {
+    return { ok: false, error: `OperatingDeposit: companies owe exactly ${MIN_OPERATING_DEPOSIT} ETH combined (A ${input.feeSplitBps} bps, B the rest), got ${Number(depositWei) / 1e18}` }
   }
   return { ok: true }
 }

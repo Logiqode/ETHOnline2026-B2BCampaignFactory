@@ -127,6 +127,58 @@ describe('Campaign A — fixed $5 discount, min spend $20', () => {
 describe('Campaign B — 20% cashback, Tue+Thu, $50/user cap weekly', () => {
 	const config = makeConfig()
 
+	// Per-tx cap interplay (mirrors backend calculateRewardEarn tests): a
+	// 10% cashback campaign with perTxCap 20 and per-user cap 100.
+	// NOTE: fixtures are raw literals (not configSchema.parse), so schema
+	// defaults like daysOfWeek=0 must be stated explicitly.
+	const makePerTxCapConfig = (): Config => ({
+		campaigns: {
+			'9': {
+				campaignId: 9,
+				rewardType: 'cashback',
+				minSpend: 0,
+				rateBps: 1000,
+				cap: 100,
+				perTxCap: 20,
+				daysOfWeek: 0,
+				start: WINDOW_START,
+				end: WINDOW_END,
+				escrow: '0x0000000000000000000000000000000000000009',
+			},
+		},
+	})
+	const tsAny = WINDOW_START + 3600
+
+	test('per-tx cap truncates a single large purchase', () => {
+		const { runtime } = makeFakeTeeRuntime(makePerTxCapConfig())
+		// 10% of $500 = 50 raw, per-tx cap 20, user budget 100 -> 20
+		const result = onHTTPTrigger(runtime, makePayload(req(9, 500, tsAny)))
+		expect(result).toContain('APPROVE')
+		expect(result).toContain('points=20')
+	})
+
+	test('per-tx cap never boosts a small earn', () => {
+		const { runtime } = makeFakeTeeRuntime(makePerTxCapConfig())
+		// 10% of $100 = 10; cap 20 not reached -> 10
+		const result = onHTTPTrigger(runtime, makePayload(req(9, 100, tsAny)))
+		expect(result).toContain('points=10')
+	})
+
+	test('both caps apply: tightest constraint wins', () => {
+		const { runtime } = makeFakeTeeRuntime(makePerTxCapConfig())
+		// 10% of $800 = 80 raw, per-tx cap 20, already earned 95 -> remaining 5 -> 5
+		const result = onHTTPTrigger(runtime, makePayload(req(9, 800, tsAny, 95)))
+		expect(result).toContain('points=5')
+	})
+
+	test('absent perTxCap is uncapped (back-compat with existing config)', () => {
+		const { runtime } = makeFakeTeeRuntime(config)
+		// Campaign B: 20% of $100 = 20, no per-tx cap configured
+		const tue2 = findDay(1)
+		const result = onHTTPTrigger(runtime, makePayload(req(2, 100, tue2)))
+		expect(result).toContain('points=20')
+	})
+
 	// Pick a Tuesday (dayIndex 1) and a Thursday (dayIndex 3) timestamp in-window.
 	// dayIndex = (floor(ts/86400) + 3) % 7. Find them by scanning.
 	const findDay = (targetIndex: number) => {
