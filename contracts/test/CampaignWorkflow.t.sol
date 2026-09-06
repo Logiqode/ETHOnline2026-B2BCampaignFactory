@@ -602,4 +602,88 @@ contract CampaignWorkflowTest is Test {
         CampaignEscrow(esc).claim(keccak256("nf"), customer, 12e18);
         assertEq(CampaignEscrow(esc).platformFeesAccrued(), 0, "no fee when bps=0");
     }
+
+/*//////////////////////////////////////////////////////////////
+                  CRE REPORT PATH (onReport / IReceiver)
+//////////////////////////////////////////////////////////////*/
+
+/// @dev Base Sepolia CRE production forwarder (docs: Forwarder Directory).
+address constant CRE_FORWARDER = 0xF8344CFd5c43616a4366C34E3EEE75af79a74482;
+
+/// @dev Build forwarder metadata: workflowId(32) || workflowName(10) || workflowOwner(20).
+function _metadata(address wfOwner) internal pure returns (bytes memory) {
+    return abi.encodePacked(bytes32(uint256(123)), bytes10(0x77697a6172642d747465), wfOwner);
+}
+
+/// @dev Build the report payload the enclave encodes.
+function _report(bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei)
+    internal pure returns (bytes memory)
+{
+    return abi.encode(nullifier, recipient, amountSpentWei, eligible, pointsWei);
+}
+
+function test_OnReportMintsThroughForwarder() public {
+    bytes32 nf = keccak256("report-claim-1");
+    uint256 spend = 50e18; // $50 at 10% => 5 points
+    uint256 points = 5e18;
+
+    vm.prank(CRE_FORWARDER);
+    CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, spend, true, points));
+
+    assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), points, "ledger updated");
+    assertEq(CampaignEscrow(escrowAddr).availableBalance(customer), points, "unspent updated");
+    assertEq(CampaignReward(rewardAddr).balanceOf(customer, rewardTokenId), points, "ERC-1155 minted");
+    assertTrue(CampaignEscrow(escrowAddr).usedNullifiers(nf), "nullifier consumed");
+}
+
+function test_OnReportRejectsNonForwarderCaller() public {
+    bytes32 nf = keccak256("report-claim-2");
+    vm.prank(address(0xBAD));
+    vm.expectRevert(CampaignEscrow.CampaignEscrow__InvalidForwarder.selector);
+    CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 50e18, true, 5e18));
+}
+
+function test_OnReportRejectsWrongWorkflowOwner() public {
+    bytes32 nf = keccak256("report-claim-3");
+    vm.prank(CRE_FORWARDER);
+    vm.expectRevert();
+    CampaignEscrow(escrowAddr).onReport(_metadata(address(0xDEAD)), _report(nf, customer, 50e18, true, 5e18));
+}
+
+function test_OnReportRejectsIneligibleVerdict() public {
+    bytes32 nf = keccak256("report-claim-4");
+    vm.prank(CRE_FORWARDER);
+    vm.expectRevert(CampaignEscrow.CampaignEscrow__ReportNotEligible.selector);
+    CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 50e18, false, 0));
+}
+
+function test_OnReportRejectsOverMintedPoints() public {
+    bytes32 nf = keccak256("report-claim-5");
+    // Enclave (or a compromised report) claims 50 points for a $50 spend at 10% —
+    // on-chain re-verification against computePointsPreview must reject.
+    vm.prank(CRE_FORWARDER);
+    vm.expectRevert(CampaignEscrow.CampaignEscrow__InvalidReport.selector);
+    CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 50e18, true, 50e18));
+}
+
+function test_OnReportReplayRejected() public {
+    bytes32 nf = keccak256("report-claim-6");
+    bytes memory meta = _metadata(workflowOwner);
+    bytes memory rep = _report(nf, customer, 50e18, true, 5e18);
+    vm.prank(CRE_FORWARDER);
+    CampaignEscrow(escrowAddr).onReport(meta, rep);
+    vm.prank(CRE_FORWARDER);
+    vm.expectRevert(); // NullifierAlreadyUsed (arg-carrying error: bare expectation)
+    CampaignEscrow(escrowAddr).onReport(meta, rep);
+}
+
+function test_OnReportMinSpendStillEnforced() public {
+    // setUp terms have minSpend enabled at $10 (default _terms); $5 spend computes
+    // points fine on-chain preview, but enforceMinSpend must revert in the claim core.
+    bytes32 nf = keccak256("report-claim-7");
+    vm.prank(CRE_FORWARDER);
+    vm.expectRevert(); // BelowMinSpend from CampaignRulesLib
+    CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 5e18, true, 0.5e18));
+}
+
 }

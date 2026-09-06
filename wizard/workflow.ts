@@ -1,11 +1,16 @@
 import {
 	cre,
+	getNetwork,
 	hexToBase64,
+	bytesToHex,
+	TxStatus,
 	text,
 	type HTTPPayload,
+	type Runtime,
 	type TeeRuntime,
 } from '@chainlink/cre-sdk'
-import { encodeAbiParameters, parseAbiParameters } from 'viem'
+import { encodeCallMsg } from '@chainlink/cre-sdk'
+import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, keccak256, concatHex, toHex, toBytes } from 'viem'
 import { z } from 'zod'
 
 // ─── Campaign terms (per campaign) ─────────────────────────────
@@ -65,9 +70,13 @@ const campaignSchema = z.discriminatedUnion('rewardType', [cashbackSchema, disco
 type Campaign = z.infer<typeof campaignSchema>
 
 // ─── Config Schema ──────────────────────────────────────────────
-// `campaigns` is keyed by the campaignId as a string. Workflow plumbing is global.
+// Deliberately MINIMAL: campaign terms are read ON-CHAIN from the factory at
+// request time (the factory is the single stable "workflow master" address),
+// so new campaigns work with zero workflow redeploys. Only public plumbing
+// lives in config.
 export const configSchema = z.object({
-	campaigns: z.record(z.string(), campaignSchema),
+	chainName: z.string(),      // e.g. 'ethereum-testnet-sepolia-base-1'
+	factoryAddress: z.string(), // deployed CampaignFactory on the target chain
 })
 export type Config = z.infer<typeof configSchema>
 
@@ -87,7 +96,10 @@ const requestSchema = z.object({
 export type Request = z.infer<typeof requestSchema>
 
 // ─── Eligibility (deterministic, runs inside enclave) ─────────
-function evaluate(request: Request, campaign: Campaign): { eligible: boolean; points: number; reason: string } {
+// The evaluator consumes on-chain terms (flat shape from readCampaignOnChain).
+type EvalCampaign = OnChainCampaign
+
+export function evaluate(request: Request, campaign: EvalCampaign): { eligible: boolean; points: number; reason: string } {
 	// 1. Date window
 	if (request.timestamp < campaign.start) {
 		return { eligible: false, points: 0, reason: 'before-campaign-start' }
@@ -100,43 +112,25 @@ function evaluate(request: Request, campaign: Campaign): { eligible: boolean; po
 		return { eligible: false, points: 0, reason: 'below-min-spend' }
 	}
 
-	// 3. Reward mechanic
-	if (campaign.rewardType === 'discount') {
-		// A discount is an amount off the price, reported as the reward.
-		const discount =
-			campaign.discountType === 'percent'
-				? (campaign.discountValue / 100) * request.amountSpent
-				: campaign.discountValue
-		// Per-transaction cap (USD): flat discounts cap at their own value; %
-		// discounts use the configured cap. Absent = uncapped. Tightest wins.
-		let capped = discount
-		if (campaign.perTxCap !== undefined) capped = Math.min(capped, campaign.perTxCap)
-		if (campaign.discountType === 'fixed') capped = Math.min(capped, campaign.discountValue)
-		return { eligible: true, points: capped, reason: 'ok' }
-	}
-
-	if (campaign.rewardType === 'digital') {
-		// Digital merchandise: the reward is the NFT (points = 1 redemption), gated by
-		// min-spend. totalRedeemCap is enforced by the caller/escrow; the workflow
-		// confirms eligibility and reports 1 unit.
-		return { eligible: true, points: 1, reason: 'ok' }
-	}
-
-	// cashback
+	// 3. Reward mechanic. The demo escrow encodes ONE mechanic — percent
+	// cashback (rateBps of the purchase) — in CampaignTerms.rateBps.
 	// 3a. Day-of-week gate (bitmask 0=Mon..6=Sun). UTC weekday from timestamp.
-	if (campaign.daysOfWeek !== 0) {
+	if (campaign.dayOfWeekEnabled && campaign.daysOfWeek !== 0) {
 		const dayIndex = ((Math.floor(request.timestamp / 86400) + 3) % 7) // 0=Mon..6=Sun (epoch was Thu)
 		if (((campaign.daysOfWeek >> dayIndex) & 1) !== 1) {
 			return { eligible: false, points: 0, reason: 'not-allowed-day' }
 		}
 	}
-	// 3b. Cashback = rate% of spend, capped per-tx, then clamped at cap - earnedInWindow.
-	// Tightest constraint wins (mirrors backend calculateRewardEarn).
+	// 3b. Cashback = rate% of spend, clamped at cap - earnedInWindow (the caller
+	// computes the window; the escrow re-verifies on-chain). Tightest wins —
+	// mirrors backend calculateRewardEarn. capEnabled=false means no cap:
+	// `cap` is 0 on-chain and the clamp must be skipped, not applied as 0.
 	const raw = (campaign.rateBps / 10_000) * request.amountSpent
 	let points = raw
-	if (campaign.perTxCap !== undefined) points = Math.min(points, campaign.perTxCap)
-	const remaining = campaign.cap - (request.earnedInWindow ?? 0)
-	points = Math.min(points, Math.max(remaining, 0))
+	if (campaign.capEnabled) {
+		const remaining = campaign.cap - (request.earnedInWindow ?? 0)
+		points = Math.min(points, Math.max(remaining, 0))
+	}
 	if (points <= 0) {
 		return { eligible: false, points: 0, reason: 'cap-exhausted' }
 	}
@@ -149,6 +143,142 @@ function pointsToWei(points: number): bigint {
 	return BigInt(scaled.toLocaleString('en-US', { useGrouping: false }))
 }
 
+// ─── On-chain reads (enclave → factory/escrow, via EVM capability) ──────────
+// The factory is the "workflow master": campaign terms are read at request
+// time, so campaigns created after the workflow was deployed work immediately.
+
+const FACTORY_ABI = [
+	{
+		name: 'campaigns',
+		type: 'function',
+		stateMutability: 'view',
+		inputs: [{ name: '', type: 'uint256' }],
+		outputs: [
+			{ name: 'escrow', type: 'address' },
+			{ name: 'reward', type: 'address' },
+			{ name: 'rewardTokenId', type: 'uint256' },
+			{ name: 'start', type: 'uint64' },
+			{ name: 'end', type: 'uint64' },
+		],
+	},
+] as const
+
+const ESCROW_TERMS_ABI = [
+	{
+		name: 'terms',
+		type: 'function',
+		stateMutability: 'view',
+		inputs: [],
+		outputs: [
+			{ name: 'rateBps', type: 'uint256' },
+			{ name: 'start', type: 'uint64' },
+			{ name: 'end', type: 'uint64' },
+			{ name: 'reward', type: 'address' },
+			{ name: 'rewardTokenId', type: 'uint256' },
+			{
+				name: 'rules',
+				type: 'tuple',
+				components: [
+					{ name: 'minSpendEnabled', type: 'bool' },
+					{ name: 'minSpend', type: 'uint256' },
+					{ name: 'capEnabled', type: 'bool' },
+					{ name: 'cap', type: 'uint256' },
+					{ name: 'dayOfWeekEnabled', type: 'bool' },
+					{ name: 'daysOfWeek', type: 'uint8' },
+				],
+			},
+			{ name: 'platformFeeBps', type: 'uint256' },
+			{ name: 'platformFeeAccount', type: 'address' },
+		],
+	},
+] as const
+
+interface OnChainCampaign {
+	escrow: string
+	rateBps: number
+	start: number
+	end: number
+	minSpend: number // USD
+	cap: number // reward units
+	minSpendEnabled: boolean
+	capEnabled: boolean
+	dayOfWeekEnabled: boolean
+	daysOfWeek: number
+}
+
+function getEvmClient(chainName: string) {
+	const net = getNetwork({ chainFamily: 'evm', chainSelectorName: chainName, isTestnet: true })
+	if (!net) throw new Error(`Network not found for chain name: ${chainName}`)
+	return new cre.capabilities.EVMClient(net.chainSelector.selector)
+}
+
+// EVM capability calls (reads + writes) route through the DON runtime — the
+// enclave runtime cannot reach the chain directly. A TeeRuntime escalates to
+// its DON counterpart via usingTheDons().
+function donRuntimeOf(runtime: Runtime<Config> | TeeRuntime<Config>): Runtime<Config> {
+	if ('usingTheDons' in runtime) return runtime.usingTheDons()
+	return runtime as Runtime<Config>
+}
+
+// Decode an ABI-encoded single value returned by callContract (protobuf bytes → hex).
+function decodeCall<T>(abi: readonly unknown[], functionName: string, data: Uint8Array | undefined): T {
+	if (!data || data.length === 0) throw new Error(`empty callContract reply for ${functionName}`)
+	const params = { abi: abi as never, functionName, data: bytesToHex(data) }
+	return decodeFunctionResult(params as never) as T
+}
+
+// Read the campaign's terms from the factory + escrow on Base Sepolia.
+function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typeof getEvmClient>, campaignId: number): OnChainCampaign {
+	const cfg = runtime.config
+	const callData = encodeFunctionData({ abi: FACTORY_ABI, functionName: 'campaigns', args: [BigInt(campaignId)] })
+	const reply = evmClient
+		.callContract(donRuntimeOf(runtime), {
+			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: cfg.factoryAddress as `0x${string}`, data: callData }),
+		})
+		.result()
+	const info = decodeCall<{ escrow: string; reward: string; rewardTokenId: bigint; start: bigint; end: bigint }>(FACTORY_ABI, 'campaigns', reply.data)
+	if (info.escrow === '0x0000000000000000000000000000000000000000') {
+		throw new Error(`Unknown campaignId: ${campaignId}`)
+	}
+
+	const termsData = encodeFunctionData({ abi: ESCROW_TERMS_ABI, functionName: 'terms', args: [] })
+	const termsReply = evmClient
+		.callContract(donRuntimeOf(runtime), {
+			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: info.escrow as `0x${string}`, data: termsData }),
+		})
+		.result()
+	type Terms = { rateBps: bigint; start: bigint; end: bigint; rules: { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number } }
+	const terms = decodeCall<Terms>(ESCROW_TERMS_ABI, 'terms', termsReply.data)
+
+	// 18-decimal USD values → plain numbers for evaluation.
+	const usd = (wei: bigint) => Number(wei) / 1e18
+	return {
+		escrow: info.escrow,
+		rateBps: Number(terms.rateBps),
+		start: Number(terms.start),
+		end: Number(terms.end),
+		minSpend: terms.rules.minSpendEnabled ? usd(terms.rules.minSpend) : 0,
+		cap: terms.rules.capEnabled ? usd(terms.rules.cap) : 0,
+		minSpendEnabled: terms.rules.minSpendEnabled,
+		capEnabled: terms.rules.capEnabled,
+		dayOfWeekEnabled: terms.rules.dayOfWeekEnabled,
+		daysOfWeek: terms.rules.daysOfWeek,
+	}
+}
+
+// ─── Nullifier (master-salt derivation, enclave-only) ───────────
+// campaignSecret = HMAC-SHA256(master, campaignId); nullifier = keccak256(campaignSecret || userAnchor).
+// One Vault secret covers every campaign; the secret never leaves the enclave.
+// Uses @noble/hashes (pure JS) — node:crypto is not available in CRE WASM workflows.
+import { hmac } from '@noble/hashes/hmac.js'
+import { sha256 } from '@noble/hashes/sha2.js'
+
+function deriveNullifier(master: string, campaignId: number, userAnchor: string): `0x${string}` {
+	const campaignSecret = hmac(sha256, toBytes(master), toBytes(String(campaignId)))
+	const digest = keccak256(concatHex([toHex(campaignSecret), toHex(userAnchor as `0x${string}`)]))
+	return digest
+}
+
 // ─── HTTP Trigger Handler (runs inside the enclave) ────────────
 export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload): string => {
 	const config = runtime.config
@@ -157,9 +287,8 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 		throw new Error('HTTP trigger payload is required')
 	}
 
-	// Load a secret inside the enclave (Vault DON) — never log its value.
-	const apiToken = runtime.getSecret({ id: 'API_TOKEN' }).result().value
-	runtime.log(`secret loaded (${apiToken.length} chars)`)
+	// Load the master nullifier secret inside the enclave (Vault DON) — never log it.
+	const master = runtime.getSecret({ id: 'CAMPAIGN_NULLIFIER_MASTER' }).result().value
 
 	// Parse the request body (decode the bytes input).
 	const request = requestSchema.parse(JSON.parse(Buffer.from(payload.input).toString('utf8')))
@@ -168,36 +297,104 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 			` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`,
 	)
 
-	// Look up the campaign this payload is for.
-	const campaign = config.campaigns[String(request.campaignId)]
-	if (!campaign) {
-		throw new Error(`Unknown campaignId: ${request.campaignId}`)
-	}
+	// Read this campaign's terms ON-CHAIN from the factory (workflow master).
+	const evmClient = getEvmClient(config.chainName)
+	const campaign = readCampaignOnChain(donRuntimeOf(runtime), evmClient, request.campaignId)
+	runtime.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap}`)
 
 	// Evaluate eligibility inside the enclave.
 	const verdict = evaluate(request, campaign)
 	runtime.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`)
 
-	// Cross back to the DON for consensus; build a report (write is commented until
-	// the receiver contract is deployed on Base Sepolia).
-	const donRuntime = runtime.usingTheDons()
-	const reportPayload = encodeAbiParameters(
-		parseAbiParameters('bool eligible, uint256 points'),
-		[verdict.eligible, pointsToWei(verdict.points)],
+	// Nullifier derived from the Vault master secret (enclave-only).
+	const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor)
+
+	if (!verdict.eligible) {
+		runtime.log(`ineligible (${verdict.reason}) — no on-chain write`)
+		return `REJECT points=0 reason=${verdict.reason}`
+	}
+
+	// The report body IS the call data the forwarder executes against the
+	// receiver: encode escrow.onReport(metadata, report) fully off-chain.
+	// metadata = abi.encodePacked(workflowId(32) || workflowName(10) || workflowOwner(20));
+	// report = abi.encode(nullifier, recipient, amountSpentWei, eligible, pointsWei).
+	const innerReport = encodeAbiParameters(
+		parseAbiParameters('bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei'),
+		[nullifier, request.userAnchor as `0x${string}`, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
 	)
-	donRuntime
+	const workflowOwner = getWorkflowOwnerAddress()
+	const metadata = encodeAbiParameters(
+		parseAbiParameters('bytes32 workflowId'),
+		[WORKFLOW_ID],
+	)
+	// workflowName(10) || workflowOwner(20) appended packed after the 32-byte id.
+	const metadataPacked = (metadata + toHex(toBytes(workflowName10(workflowOwner))).slice(2).padStart(60, '0')) as `0x${string}`
+	const callData = encodeFunctionData({
+		abi: ESCROW_ONREPORT_ABI,
+		functionName: 'onReport',
+		args: [metadataPacked, innerReport],
+	})
+
+	// Cross back to the DON for consensus (DON signs the report), then write it.
+	const donRuntime = runtime.usingTheDons()
+	const reportResponse = donRuntime
 		.report({
-			encodedPayload: hexToBase64(reportPayload),
+			encodedPayload: hexToBase64(callData),
 			encoderName: 'evm',
 			signingAlgo: 'ecdsa',
 			hashingAlgo: 'keccak256',
 		})
 		.result()
 
-	runtime.log(`report-ready (not written): ${hexToBase64(reportPayload).slice(0, 32)}...`)
+	// Write the DON-signed report via the EVM capability — routed through the
+	// DON runtime (outside the TEE), forwarder → escrow.onReport.
+	const writeResult = evmClient
+		.writeReport(donRuntime, {
+			receiver: campaign.escrow as `0x${string}`,
+			report: reportResponse,
+		})
+		.result()
 
-	return `${verdict.eligible ? 'APPROVE' : 'REJECT'} points=${verdict.points} reason=${verdict.reason}`
+	runtime.log(`report written to escrow ${campaign.escrow} (txStatus=${writeResult.txStatus})`)
+	if (writeResult.txStatus !== TxStatus.SUCCESS) {
+		throw new Error(`on-chain write failed: ${writeResult.errorMessage || writeResult.txStatus}`)
+	}
+
+	return `APPROVE points=${verdict.points} reason=${verdict.reason}`
 }
+
+// ─── Workflow identity (pinned into report metadata) ───────────
+// The escrow's onReport checks metadata.workflowOwner === terms.workflowOwner.
+// 32-byte workflow id assigned at `cre workflow deploy` (stable placeholder for
+// local simulation; update after first deploy to the registry-issued id).
+const WORKFLOW_ID = keccak256(toHex('wizard-workflow-v1'))
+const WORKFLOW_NAME = 'wizard' // bytes10 in metadata
+
+function workflowName10(owner: string): `0x${string}` {
+	// metadata = workflowId(32) || workflowName(10) || workflowOwner(20)
+	const name = toHex(WORKFLOW_NAME).slice(2).padStart(20, '0').slice(0, 20) // 10 bytes
+	const ownerPacked = toHex(owner as `0x${string}`).slice(2) // 40 hex chars
+	return (`0x${name}${ownerPacked}`) as `0x${string}`
+}
+
+function getWorkflowOwnerAddress(): string {
+	// The workflow-owner EOA is public config (project.yaml account address);
+	// in the demo it's the platform wallet that launched the campaigns.
+	return process.env.WORKFLOW_OWNER_ADDRESS || '0x9587BD3e8195D597BF4e82B18724178e52B55c4F'
+}
+
+const ESCROW_ONREPORT_ABI = [
+	{
+		name: 'onReport',
+		type: 'function',
+		stateMutability: 'nonpayable',
+		inputs: [
+			{ name: 'metadata', type: 'bytes' },
+			{ name: 'report', type: 'bytes' },
+		],
+		outputs: [],
+	},
+] as const
 
 // ─── Workflow Init (HTTP trigger) ──────────────────────────────
 export function initWorkflow(config: Config) {

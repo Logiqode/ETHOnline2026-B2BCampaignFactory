@@ -117,7 +117,9 @@ contract CampaignFactory {
         CampaignEscrow.CampaignTerms memory termsWithReward = terms_;
         termsWithReward.reward = address(reward);
         termsWithReward.rewardTokenId = tokenId;
-        CampaignEscrow(escrow).initialize(termsWithReward, workflowOwner_);
+        // Base Sepolia CRE production forwarder — the only caller allowed to
+        // deliver DON reports to the escrow's onReport path.
+        CampaignEscrow(escrow).initialize(termsWithReward, workflowOwner_, 0xF8344CFd5c43616a4366C34E3EEE75af79a74482);
 
         campaigns[campaignId] = CampaignInfo({
             escrow: escrow,

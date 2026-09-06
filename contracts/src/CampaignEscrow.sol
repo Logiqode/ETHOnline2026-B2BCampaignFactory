@@ -39,6 +39,9 @@ contract CampaignEscrow {
     error CampaignEscrow__AlreadyInitialized();
     error CampaignEscrow__InvalidWorkflowOwner();
     error CampaignEscrow__OnlyWorkflowOwner(address caller, address owner);
+    error CampaignEscrow__InvalidForwarder();
+    error CampaignEscrow__ReportNotEligible();
+    error CampaignEscrow__InvalidReport();
     error CampaignEscrow__CampaignNotLive(uint256 timestamp, uint256 start, uint256 end);
     error CampaignEscrow__CampaignEnded(uint256 timestamp, uint256 end);
     error CampaignEscrow__NullifierAlreadyUsed(bytes32 nullifier);
@@ -90,6 +93,11 @@ contract CampaignEscrow {
     /// @notice The dedicated EOA that CRE `evm.write` submits verdicts from.
     address public workflowOwner;
 
+    /// @notice The CRE Forwarder trusted to deliver DON reports (Base Sepolia
+    ///         production forwarder). Set at initialize; address(0) disables
+    ///         the onReport path entirely (EOA-claim-only deployments).
+    address public forwarder;
+
     /// @notice Admin who can manage redeemers. Set to the initializer (the factory).
     address public owner;
 
@@ -109,7 +117,10 @@ contract CampaignEscrow {
 
     /// @param terms_ Campaign terms (all public; agreed by both brands at launch).
     /// @param workflowOwner_ The CRE workflow-owner EOA (dedicated claim submitter).
-    function initialize(CampaignTerms calldata terms_, address workflowOwner_) external {
+    /// @param forwarder_ The CRE Forwarder allowed to deliver DON reports
+    ///        (Base Sepolia: 0xF8344CFd5c43616a4366C34E3EEE75af79a74482).
+    ///        May be address(0) to disable the onReport path (EOA claims only).
+    function initialize(CampaignTerms calldata terms_, address workflowOwner_, address forwarder_) external {
         if (initialized_) revert CampaignEscrow__AlreadyInitialized();
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
@@ -120,6 +131,7 @@ contract CampaignEscrow {
         owner = msg.sender; // the factory (which cloned + initialized us)
         terms = terms_;
         workflowOwner = workflowOwner_;
+        forwarder = forwarder_;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -147,31 +159,50 @@ contract CampaignEscrow {
         returns (uint256 points)
     {
         _onlyWorkflowOwner();
-        _requireLive();
-        _requireAtMost2Decimals(amountSpent); // $3.125-style inputs rejected
+        points = _claimInternal(nullifier, recipient, amountSpent);
+    }
 
-        // Rule gates — each only fires if its flag is set. Window check above runs first,
-        // so day-of-week can never override the campaign's [start, end] boundaries.
-        CampaignRulesLib.requireAllowedDay(terms.rules, block.timestamp);
+    /*//////////////////////////////////////////////////////////////
+                        CRE REPORT PATH  (IReceiver)
+    //////////////////////////////////////////////////////////////*/
 
-        if (usedNullifiers[nullifier]) revert CampaignEscrow__NullifierAlreadyUsed(nullifier);
+    /// @notice Receive a DON-consensus report from the CRE Forwarder and execute
+    ///         the claim it carries. This is the production write path: the
+    ///         Workflow DON signs the verdict; only the trusted forwarder may
+    ///         deliver it; workflow identity is pinned in the metadata.
+    /// @dev Report payload: abi.encode(bytes32 nullifier, address recipient,
+    ///      uint256 amountSpentWei, bool eligible, uint256 pointsWei).
+    ///      Metadata (encodePacked by the forwarder): workflowId(32) ||
+    ///      workflowName(10) || workflowOwner(20).
+    /// @param metadata Report metadata (workflow identity).
+    /// @param report The enclave's signed verdict payload.
+    function onReport(bytes calldata metadata, bytes calldata report) external {
+        if (forwarder == address(0) || msg.sender != forwarder) revert CampaignEscrow__InvalidForwarder();
 
-        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
-        if (proof.originalBlock == 0) proof.originalBlock = block.number;
+        // Workflow identity check: the report's workflow-owner must be the
+        // workflowOwner this escrow was initialized with.
+        address reportWorkflowOwner = _extractWorkflowOwner(metadata);
+        if (reportWorkflowOwner != workflowOwner) revert CampaignEscrow__OnlyWorkflowOwner(reportWorkflowOwner, workflowOwner);
 
-        uint256 alreadyEarned = proof.totalBalance;
-        // min-spend gate (reverts if under), then points (capped only if capEnabled).
-        CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
-        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
+        if (report.length != 160) revert CampaignEscrow__InvalidReport(); // 4 x 32 + address padding
+        (bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei) =
+            abi.decode(report, (bytes32, address, uint256, bool, uint256));
+        if (!eligible) revert CampaignEscrow__ReportNotEligible();
 
-        // Unspent balance grows with each earn; totalBalance is the lifetime lineage.
-        proof.unspentBalance += points;
-        proof.totalBalance += points;
-        usedNullifiers[nullifier] = true;
-        _accruePlatformFee(points);
-        emit Claim(nullifier, recipient, points, amountSpent);
+        // Points re-verified on-chain from public terms + ledger (defense-in-depth):
+        // the delivered pointsWei must match what the rules library computes for
+        // (amountSpent, recipient's already-earned). The enclave cannot over-mint.
+        uint256 expected = this.computePointsPreview(amountSpentWei, _totalEarned(recipient));
+        if (pointsWei != expected) revert CampaignEscrow__InvalidReport();
 
-        CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
+        _claimInternalWithPoints(nullifier, recipient, amountSpentWei, pointsWei);
+    }
+
+    /// @dev Extract the workflow-owner address from forwarder metadata:
+    ///      workflowId(32) || workflowName(10) || workflowOwner(20).
+    function _extractWorkflowOwner(bytes calldata metadata) internal pure returns (address) {
+        if (metadata.length < 62) revert CampaignEscrow__InvalidReport();
+        return address(bytes20(metadata[42:62]));
     }
 
     /// @dev Points are computed by CampaignRulesLib (capped only if the cap rule is on).
@@ -227,6 +258,68 @@ contract CampaignEscrow {
 
     function _onlyWorkflowOwner() internal view {
         if (msg.sender != workflowOwner) revert CampaignEscrow__OnlyWorkflowOwner(msg.sender, workflowOwner);
+    }
+
+    /// @dev Shared claim core for both paths (EOA `claim` + CRE `onReport`).
+    function _claimInternal(bytes32 nullifier, address recipient, uint256 amountSpent) internal returns (uint256 points) {
+        _requireLive();
+        _requireAtMost2Decimals(amountSpent); // $3.125-style inputs rejected
+
+        // Rule gates — each only fires if its flag is set. Window check above runs first,
+        // so day-of-week can never override the campaign's [start, end] boundaries.
+        CampaignRulesLib.requireAllowedDay(terms.rules, block.timestamp);
+
+        if (usedNullifiers[nullifier]) revert CampaignEscrow__NullifierAlreadyUsed(nullifier);
+
+        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
+        if (proof.originalBlock == 0) proof.originalBlock = block.number;
+
+        uint256 alreadyEarned = proof.totalBalance;
+        // min-spend gate (reverts if under), then points (capped only if capEnabled).
+        CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
+        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
+
+        _applyEarn(proof, nullifier, recipient, amountSpent, points);
+    }
+
+    /// @dev onReport variant: points were already computed by the enclave AND
+    ///      re-verified on-chain against computePointsPreview — apply as-is.
+    function _claimInternalWithPoints(bytes32 nullifier, address recipient, uint256 amountSpent, uint256 points) internal {
+        _requireLive();
+        _requireAtMost2Decimals(amountSpent);
+
+        // Rule gates (same order as the EOA path): window first, then day, then
+        // min-spend — the report being DON-signed does not waive campaign rules.
+        CampaignRulesLib.requireAllowedDay(terms.rules, block.timestamp);
+        CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
+        if (usedNullifiers[nullifier]) revert CampaignEscrow__NullifierAlreadyUsed(nullifier);
+
+        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
+        if (proof.originalBlock == 0) proof.originalBlock = block.number;
+
+        _applyEarn(proof, nullifier, recipient, amountSpent, points);
+    }
+
+    function _applyEarn(
+        CampaignProof storage proof,
+        bytes32 nullifier,
+        address recipient,
+        uint256 amountSpent,
+        uint256 points
+    ) internal {
+        // Unspent balance grows with each earn; totalBalance is the lifetime lineage.
+        proof.unspentBalance += points;
+        proof.totalBalance += points;
+        usedNullifiers[nullifier] = true;
+        _accruePlatformFee(points);
+        emit Claim(nullifier, recipient, points, amountSpent);
+
+        CampaignReward(terms.reward).mint(recipient, terms.rewardTokenId, points);
+    }
+
+    /// @dev Recipient's lifetime earned (for onReport's points re-verification).
+    function _totalEarned(address wallet) internal view returns (uint256) {
+        return campaignLedger[terms.rewardTokenId][wallet].totalBalance;
     }
 
     function _onlyOwner() internal view {

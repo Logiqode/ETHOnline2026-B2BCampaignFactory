@@ -1,47 +1,4 @@
 {
-  "campaigns": {
-    "4": {
-      "campaignId": 4,
-      "start": 1788973200,
-      "end": 4102444800,
-      "escrow": "0x1d7d92b88ef7b90c47a88370246b44986b71ded3",
-      "rewardType": "cashback",
-      "minSpend": 10,
-      "rateBps": 1000,
-      "cap": 100,
-      "capPeriod": "Lifetime",
-      "capPeriodCount": 1,
-      "capResetBasis": "Rolling",
-      "daysOfWeek": 0
-    },
-    "5": {
-      "campaignId": 5,
-      "start": 1788973200,
-      "end": 4102444800,
-      "escrow": "0xfD4850cc4A25383C4B17142de9151c925cc04276",
-      "rewardType": "cashback",
-      "minSpend": 10,
-      "rateBps": 500,
-      "cap": 0,
-      "perTxCap": 50,
-      "capPeriod": "Lifetime",
-      "capPeriodCount": 1,
-      "capResetBasis": "Rolling",
-      "daysOfWeek": 0
-    },
-    "6": {
-      "campaignId": 6,
-      "start": 1788973200,
-      "end": 4102444800,
-      "escrow": "0x688C83C8fbA0d005C77827df86d27c806942c048",
-      "rewardType": "cashback",
-      "minSpend": 10,
-      "rateBps": 1000,
-      "cap": 0,
-      "capPeriod": "Lifetime",
-      "capPeriodCount": 1,
-      "capResetBasis": "Rolling",
-      "daysOfWeek": 0
-    }
-  }
+	"chainName": "ethereum-testnet-sepolia-base-1",
+	"factoryAddress": "0xa9198fD3D9e48Ee8cDc7e70AC6F1BE9547De517F"
 }

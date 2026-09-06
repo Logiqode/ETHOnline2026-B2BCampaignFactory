@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": []
+    "types": ["node"]
   },
-  "include": ["main.ts"]
+  "include": ["main.ts", "workflow.ts"]
 }

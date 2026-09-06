@@ -1,40 +1,4 @@
 {
-	"campaigns": {
-		"1": {
-			"campaignId": 1,
-			"rewardType": "discount",
-			"minSpend": 20,
-			"discountType": "fixed",
-			"discountValue": 5,
-			"start": 1757366400,
-			"end": 1775049600,
-			"escrow": "0x0000000000000000000000000000000000000001"
-		},
-		"2": {
-			"campaignId": 2,
-			"rewardType": "cashback",
-			"minSpend": 0,
-			"rateBps": 2000,
-			"cap": 50,
-			"capPeriod": "Week",
-			"capPeriodCount": 1,
-			"capResetBasis": "Calendar",
-			"capResetWeekday": 1,
-			"capResetTime": "04:00",
-			"daysOfWeek": 10,
-			"start": 1757366400,
-			"end": 1775049600,
-			"escrow": "0x0000000000000000000000000000000000000002"
-		},
-		"3": {
-			"campaignId": 3,
-			"rewardType": "digital",
-			"minSpend": 15,
-			"digitalName": "White Bear Plushie Medium",
-			"totalRedeemCap": 200,
-			"start": 1757366400,
-			"end": 1775049600,
-			"escrow": "0x0000000000000000000000000000000000000003"
-		}
-	}
+	"chainName": "ethereum-testnet-sepolia-base-1",
+	"factoryAddress": "0xa9198fD3D9e48Ee8cDc7e70AC6F1BE9547De517F"
 }
