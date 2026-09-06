@@ -81,6 +81,17 @@ export const configSchema = z.object({
 })
 export type Config = z.infer<typeof configSchema>
 
+// ─── HTTP-trigger authorized keys ──────────────────────────────
+// Addresses allowed to sign JSON-RPC requests that fire the trigger (the DON
+// verifies each request's ECDSA signature against this list — the "public
+// key" field takes the 20-byte EVM address form, 0x + 40 hex). Demo: the
+// platform deployer/relay EOA — its private key lives in the platform .env
+// only. Production roadmap: a dedicated relay keypair, one workflow per
+// campaign.
+const AUTHORIZED_TRIGGER_KEYS = [
+	'0x9587BD3e8195D597BF4e82B18724178e52B55c4F',
+] as const
+
 // ─── HTTP Request Payload ───────────────────────────────────────
 // The HTTP body selects a campaign and carries the POS purchase. `earnedInWindow`
 // is the caller-computed amount the user already earned in the current reset window
@@ -440,12 +451,20 @@ const ESCROW_ONREPORT_ABI = [
 ] as const
 
 // ─── Workflow Init (HTTP trigger) ──────────────────────────────
+// Trigger auth: every incoming HTTP request must carry an ECDSA signature from
+// an authorized key (the platform relay). Merchants never touch keys — they
+// authenticate to the platform backend with API keys; the backend signs the
+// workflow request with the deployer key (demo; see README security notes).
 export function initWorkflow(config: Config) {
 	const httpTrigger = new cre.capabilities.HTTPCapability()
 
 	return [
-		cre.handlerInTee(httpTrigger.trigger({}), onHTTPTrigger, [
-			{ tee: 'nitro', regions: ['us-west-2'] },
-		]),
+		cre.handlerInTee(
+			httpTrigger.trigger({
+				authorizedKeys: [{ type: 'KEY_TYPE_ECDSA_EVM', publicKey: AUTHORIZED_TRIGGER_KEYS[0] }],
+			}),
+			onHTTPTrigger,
+			[{ tee: 'nitro', regions: ['us-west-2'] }],
+		),
 	]
 }

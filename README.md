@@ -140,60 +140,66 @@ bun run test                           # or: bun test
 cd ..   # repo root
 
 # Run one payload against a campaign
-cre workflow simulate ./wizard --target=staging-settings -e .env --http-payload ./wizard/test-payloads/campaign-a-pass.json
+cre workflow simulate ./wizard --target=staging-settings -e .env --http-payload ./wizard/test-payloads/onchain-1-pass.json
 ```
 
 - `--target=staging-settings` selects the config from `workflow.yaml` (`config.staging.json`).
-- `-e .env` loads the environment (including `SECRET_API_TOKEN`, read by the enclave at runtime — no shell export needed).
+- `-e .env` loads the environment (including `CAMPAIGN_NULLIFIER_MASTER`, read by the enclave at runtime — no shell export needed).
 - `--http-payload <path>` is the HTTP request body. Payload files live in `wizard/test-payloads/`.
 
-The three demo campaigns (in `config.staging.json` / `config.production.json`):
+The simulation reads campaign terms **live from the deployed contracts on Base Sepolia** (factory → escrow), so the verdicts below reflect real on-chain state.
 
-| id | Mechanic | Rules |
-|----|----------|-------|
-| 1 | Fixed $5 discount | min spend $20, no caps |
-| 2 | 20% cashback | Tue+Thu only, $50/user cap, resets weekly Mon 04:00 UTC |
-| 3 | Digital Merchandise "White Bear Plushie Medium" | min spend $15, total redeem cap 200 |
+The three live demo campaigns (seeded on the deployed factory — see `contracts/script/SeedCampaigns.s.sol`):
+
+| id | Mechanic | Rules (on-chain) |
+|----|----------|------------------|
+| 1 | 10% percent cashback | min spend $10, $100/user cap, redeemable |
+| 2 | Flat $2 cashback per purchase | min spend $10, no cap, redeemable |
+| 3 | Flat $5 discount (proof-of-savings) | min spend $10, totalSaved counter only — nothing redeemable |
 
 Run all the bundled payloads (pass + fail per campaign) and check the verdict:
 
 ```bash
-for p in wizard/test-payloads/campaign-*.json; do
+for p in wizard/test-payloads/onchain-*.json wizard/test-payloads/flat-*.json wizard/test-payloads/discount-*.json; do
   echo "===== $(basename $p) ====="
   cre workflow simulate ./wizard --target=staging-settings -e .env \
     --http-payload "$p" 2>&1 | grep -E "Workflow Simulation Result|APPROVE|REJECT"
 done
 ```
 
-Expected results:
+Expected results (live on-chain terms, campaign window ≈ Sep 2026 → 2100):
 
 ```
-campaign-a-pass.json            → APPROVE points=5 reason=ok            (fixed $5 discount)
-campaign-a-fail-below-min.json  → REJECT points=0 reason=below-min-spend
-campaign-b-pass-tue.json        → APPROVE points=20 reason=ok           (20% of $100)
-campaign-b-fail-monday.json     → REJECT points=0 reason=not-allowed-day
-campaign-b-fail-cap-exhausted.json → REJECT points=0 reason=cap-exhausted
-campaign-c-pass.json            → APPROVE points=1 reason=ok            (1 NFT redemption)
-campaign-c-fail-below-min.json  → REJECT points=0 reason=below-min-spend
+onchain-1-pass.json              → APPROVE points=3 reason=ok           (10% of $30)
+onchain-1-below-min.json         → REJECT points=0 reason=below-min-spend
+onchain-1-cap-clamp.json         → APPROVE points=5 reason=ok           ($100 spend, 95 earned — clamped to cap)
+onchain-1-cap-exhausted.json     → REJECT points=0 reason=cap-exhausted
+onchain-1-after-end.json         → REJECT points=0 reason=after-campaign-end
+onchain-2-pass.json              → APPROVE points=2 reason=ok           (10% of $40 spend — legacy payload predating the flat mechanic; campaign 2 is now flat $2, so re-running it today earns the $2 flat)
+onchain-2-below-min.json         → REJECT points=0 reason=below-min-spend
+flat-2-pass.json                 → APPROVE points=2 reason=ok           (flat $2, $30 spend)
+flat-2-big-spend-same-earn.json  → APPROVE points=2 reason=ok           ($90 spend — same flat $2)
+flat-2-below-min.json            → REJECT points=0 reason=below-min-spend
+discount-3-pass.json             → APPROVE points=5 reason=ok           ($5 saved, $30 spend)
+discount-3-small-spend.json      → APPROVE points=5 reason=ok           ($12 spend — same $5 saving)
+discount-3-below-min.json        → REJECT points=0 reason=below-min-spend
 ```
 
 Simulation output shows the handler's `runtime.log` lines (debug only — removed for production) and ends with the verdict, e.g.:
 
 ```
-[USER LOG] secret loaded (27 chars)
-[USER LOG] payload: campaign=1 user=0x1234... merchant=burgera amount=30 earnedInWindow=0
-[USER LOG] eligibility: ok eligible=true points=5
-✓ Workflow Simulation Result: "APPROVE points=5 reason=ok"
+[USER LOG] payload: campaign=1 user=0xAAaA...0001 merchant=burgera amount=30 earnedInWindow=0
+[USER LOG] on-chain terms: escrow=0xd17F...4BB9 rateBps=1000 window=[1788611878,1820234278] minSpend=10 cap=100
+[USER LOG] eligibility: ok eligible=true points=3
+[USER LOG] report written to escrow 0xd17F...4BB9 (txStatus=2)
+✓ Workflow Simulation Result: "APPROVE points=3 reason=ok"
 ```
 
 ### Mock payloads
 
-Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). The campaign terms live in the `campaigns` map inside the config files:
+Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). Campaign terms are **read on-chain at request time** from the deployed factory (`0x609065A294C8Af470C748Bb107ED0dEa5d90f4Ee` on Base Sepolia, recorded in `contracts/deployments/base-sepolia.json`) — new campaigns are picked up with zero workflow redeploys.
 
-- `wizard/config.staging.json` → `--target=staging-settings`
-- `wizard/config.production.json` → `--target=production-settings`
-
-Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, disallowed day, cap exhaustion).
+Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, cap clamp/exhaustion). Use **distinct `userAnchor`s for approve cases** (duplicate anchors mint the same nullifier → on-chain duplicate-claim collision) and **EIP-55 checksummed addresses** (viem rejects non-checksummed ones).
 
 ---
 
@@ -214,9 +220,10 @@ cre workflow deploy ./wizard --target=staging-settings
 
 - **N-participant campaign support (production).** This demo UI and local backend hardcode a **2-participant** model: Company A (POS) and Company B (reward), with a single `feeSplitBps` for Company A and Company B receiving the remainder. The underlying contracts (`CampaignFactory` / `CampaignEscrow`) and the CRE workflow are **already N-party** (see the `campaigns` map keyed by `campaignId`, the `participants` array in the frontend, and the spec's N-party design), but the demo's fee-split input, the wizard's two-brand `description.participants`, and the launch validation only exercise the 2-party case. In production this would generalize to a per-participant fee-share array and an arbitrary number of participating brands.
 - `runtime.log` calls are for simulation/testing only and **must be removed** before production (enclave logs are hidden in real execution anyway).
+- **HTTP-trigger authentication & key-reuse vulnerability (current infrastructure, deliberately accepted for the demo).** The workflow's HTTP trigger requires every incoming request to carry an **ECDSA signature from an authorized key** (`authorizedKeys` in the trigger config; the DON verifies it before firing the enclave). The authorized signer is the **platform relay backend**: merchants authenticate to the platform with API keys only (no-web3-for-partners holds), and the relay signs each workflow request before submitting it. The demo vulnerability: the relay signs with the **same burner EOA that deploys contracts and owns the workflows** (`CRE_ETH_PRIVATE_KEY`). Consequences, honestly stated — (1) **capability conflation**: a compromise of that one key lets an attacker deploy malicious contracts, register workflows, AND forge eligibility payloads (minting arbitrary cashback/points to any wallet, since the enclave trusts payload facts like `amountSpent`/`earnedInWindow` from the authorized signer); (2) **no key rotation boundary**: rotating after an incident means re-deploying contracts + workflows, not just swapping an env var; (3) single-key blast radius across every campaign the shared workflow serves. Production roadmap: a **dedicated relay keypair** whose only privilege is firing workflow triggers (public key in `authorizedKeys`, private key in the backend's secret store, never used on-chain); longer term, **one workflow per campaign** with per-campaign authorized keys so a leaked trigger key's blast radius is a single campaign. Forged on-chain claims are still bounded by the DON-consensus report path (`onReport` forwarder + workflow-identity checks) — the key compromise mints *workflow-mediated* fraud, not arbitrary contract calls.
 - The workflow is **HTTP-triggered** and serves multiple campaigns from one binary: the config holds a `campaigns` map keyed by `campaignId`, and each request body selects the campaign. Production per-campaign isolation (one workflow per campaign for billing/blast-radius) is a *deployment* choice, not a code limitation — the same binary can be deployed once per campaign, each with its own config, or once for all.
-- **New campaigns after a workflow is live** require a config update + `cre workflow deploy` (workflow versions on deploy): a campaign created *after* deployment is not in the baked `campaigns` map, so its payloads fail with `Unknown campaignId`. The production roadmap is to drop the baked config and have the enclave **read campaign terms on-chain from the factory at request time** (`campaigns(id)` via `evmClient.callContract` — the factory is the single stable "workflow master" address), so new campaigns register on-chain and are picked up with zero redeploys.
-- All on-chain writes via the CRE workflow (`EVMClient.writeReport`) are currently **commented** until the receiver contract (`IReceiver`-compatible `CampaignEscrow`) is deployed on Base Sepolia.
+- **New campaigns after a workflow is live**: no redeploy needed — the enclave reads campaign terms on-chain from the factory at request time (`campaigns(id)` via `evmClient.callContract` — the factory is the single stable "workflow master" address), so new campaigns register on-chain and are picked up with zero redeploys. Only the factory address (and the trigger's authorized keys) live in the workflow config.
+- All on-chain writes via the CRE workflow (`EVMClient.writeReport`) are **live**: the deployed `CampaignEscrow` implements `IReceiver.onReport` (forwarder + workflow-identity checks) on Base Sepolia, and the workflow writes verdicts through the CRE Forwarder.
 - The `totalRedeemCap` and the reset-window *boundary* are carried in config and enforced by the caller/escrow; the workflow clamps the per-user cap against the caller-supplied `earnedInWindow`.
 - **Gas & the operating deposit (production roadmap).** In this demo the platform wallet (an EOA) pays all gas directly and the `OperatingDeposit` is a *recorded* amount owed by each company to the platform reserves (settled off-chain — no ETH moves on-chain; the companies never touch wallets). In production the roadmap is: companies deposit **USDC** (via Stripe/Coinbase fiat rails) into platform custody, and an **ERC-4337 paymaster — e.g. Coinbase Developer Platform's, billed in USDC — sponsors all campaign gas**, so neither the platform nor the companies hold ETH and deposits are USDC-denominated (no bear-market exposure on held deposits). Trade-off, honestly stated: the DIY alternative (platform holds a small ETH float, tops up from USDC periodically) avoids paymaster fees and smart-account (4337) constraints but reintroduces an ETH treasury to manage; the paymaster buys zero-ETH friction at a per-tx fee. Either way, deposits are **custody, not revenue** — unspent deposits refund to the company at campaign end.
 - **Pricing follow-through (business model).** The demo contract's `platformFeeBps` (10% uplift in the demo terms) exists as a *cost-plus buffer*: gas + an ETH-volatility premium so the platform doesn't bleed out while holding a float. Once gas is USDC-denominated (paymaster or periodic swap), that buffer's reason disappears and the platform fee drops to a thin value-based margin (e.g. ~1.5%, or 0% as a deliberate growth subsidy) — the fee is just a per-campaign parameter in `CampaignTerms`, so infrastructure savings flow straight through to customer pricing without code changes.

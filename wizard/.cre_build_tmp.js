@@ -23410,6 +23410,9 @@ var configSchema = exports_external.object({
   factoryAddress: exports_external.string(),
   workflowOwnerAddress: exports_external.string().regex(/^0x[0-9a-fA-F]{40}$/)
 });
+var AUTHORIZED_TRIGGER_KEYS = [
+  "0x9587BD3e8195D597BF4e82B18724178e52B55c4F"
+];
 var requestSchema = exports_external.object({
   campaignId: exports_external.number().int().nonnegative(),
   userAnchor: exports_external.string(),
@@ -23634,9 +23637,9 @@ var ESCROW_ONREPORT_ABI = [
 function initWorkflow(config) {
   const httpTrigger = new cre.capabilities.HTTPCapability;
   return [
-    cre.handlerInTee(httpTrigger.trigger({}), onHTTPTrigger, [
-      { tee: "nitro", regions: ["us-west-2"] }
-    ])
+    cre.handlerInTee(httpTrigger.trigger({
+      authorizedKeys: [{ type: "KEY_TYPE_ECDSA_EVM", publicKey: AUTHORIZED_TRIGGER_KEYS[0] }]
+    }), onHTTPTrigger, [{ tee: "nitro", regions: ["us-west-2"] }])
   ];
 }
 async function main() {
